@@ -1,4 +1,6 @@
 import { EvaluationController } from './evaluation.controller';
+import { ApplicationAssessmentController } from './application-assessment.controller';
+import { ApplicationAssessmentService } from './application-assessment.service';
 import { EvaluationService } from './evaluation.service';
 import { DynamicModule, Module, Provider } from '@nestjs/common';
 import { KnowledgeModule } from '../knowledge/knowledge.module';
@@ -63,7 +65,11 @@ export class AiModule {
             ]
           : []),
         ...(options.learnerApi
-          ? [UserAiController, LearnerImageController]
+          ? [
+              UserAiController,
+              LearnerImageController,
+              ApplicationAssessmentController,
+            ]
           : []),
         ...(helpdesk ? [HelpdeskSuggestController] : []),
       ],
@@ -79,6 +85,7 @@ export class AiModule {
           inject: [PrismaRateLimitStore],
         },
         AiConfigService,
+        ApplicationAssessmentService,
         AiChatLogger,
         ...(options.adminApi && options.evaluationDb
           ? [options.evaluationDb, EvaluationService]

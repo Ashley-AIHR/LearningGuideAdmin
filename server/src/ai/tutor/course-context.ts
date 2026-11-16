@@ -4,7 +4,7 @@ import type {
   KnowledgeRelease,
 } from '../../ks/contract/knowledge-client';
 
-const CONTEXT_TOKEN_BUDGET = 1100;
+const CONTEXT_TOKEN_BUDGET = 8000;
 const MAX_CONTEXT_CHUNKS = 5;
 const SNAPSHOT_TOKEN_BUDGET = 6000;
 
@@ -206,7 +206,7 @@ async function buildRetrievedContext(
       : chunks;
   if (relevantChunks.length === 0) return null;
 
-  // 按 token 预算拼接，超出时按 score 从高到低截断
+  // 保持检索排名，在预算内选择完整片段，避免截断定义或公式。
   const blocks: string[] = [];
   const seen = new Set<string>();
   let totalTokens = 0;

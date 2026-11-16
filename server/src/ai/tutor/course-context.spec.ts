@@ -94,4 +94,43 @@ describe('母版式 Release 上下文', () => {
       'KS unavailable',
     );
   });
+
+  it('大包保留课程摘要中的积分定义及课时边界，不再被 1100 预算挤掉', async () => {
+    const retrieveChunks = jest.fn().mockResolvedValue([
+      {
+        pageTitle: 'Lesson 1',
+        heading: 'Scope',
+        content:
+          'Lesson 1 covers vectors; integration is developed in Chapter 2.',
+        score: 0.4,
+        tokenCount: 800,
+      },
+      {
+        pageTitle: '全书七章精华提炼',
+        heading: '第二章：导数与积分',
+        content: '积分把小块累积起来；已知变化率可以还原总量。',
+        score: 0.2,
+        tokenCount: 380,
+      },
+      {
+        pageTitle: 'Too large',
+        heading: null,
+        content: 'This oversized chunk must not displace complete evidence.',
+        score: 0.9,
+        tokenCount: 8001,
+      },
+    ]);
+    const result = await buildTutorContext(
+      { retrieveChunks } as unknown as KnowledgeClient,
+      {
+        ...release,
+        pages: [{ title: 'Lesson 1', contentMd: 'x'.repeat(25000) }],
+      },
+      '什么是积分？',
+    );
+    expect(result.text).toContain('Lesson 1 covers vectors');
+    expect(result.text).toContain('积分把小块累积起来');
+    expect(result.text).toContain('"sourceLevel":"course_digest"');
+    expect(result.text).not.toContain('oversized chunk');
+  });
 });

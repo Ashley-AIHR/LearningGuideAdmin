@@ -529,6 +529,8 @@ Knowledge System 是系统的主界面，采用「顶部整宽 Tab 栏 + 下方�
 
 ## 4. 模块 B：AI Tutor（AI 辅导）
 
+Feedback 管理页面的分阶段范围、数据契约和验收步骤见 [Feedback 分阶段交付](AI_tutor/Feedback_Staged_Delivery.md)（2026-11-13）。首期使用示例数据，Portal 暂不接入。
+
 ### 4.1 功能概述
 
 AI Tutor 是一个独立的功能板块，提供 AI 对话能力。其知识库来源于 Knowledge System 中选中的 Course。
