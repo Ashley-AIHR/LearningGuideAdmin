@@ -21,6 +21,7 @@ export interface TextHeading {
 
 const HEADING = /<h1\b([^>]*)>([\s\S]*?)<\/h1>/gi;
 const STAMP = /\sdata-lp\s*=\s*(?:"([^"]*)"|'([^']*)')/i;
+const SAFE_CODE = /^[\w.-]+$/;
 /** 编辑器插入的展品卡片（TextEditor.tsx）；卡片里的标题和说明不是正文。 */
 const EXHIBIT_CARD =
   /<figure\b[^>]*\bdata-exhibit-code\b[^>]*>[\s\S]*?<\/figure>/gi;
@@ -60,6 +61,46 @@ export function parseTextStructure(
   });
 }
 
+/**
+ * 把这次保存的每个 H1 对到库里已有的 TEXT 学习点行（D2 的认人顺序）：
+ * 1) 先按章：H1 带着某一行的 code 就是那一行，改了标题也一样；一行只认一次；
+ * 2) 没有章的 H1 再按标题：从前往后认第一条还没被认走、标题相同的行（标题重复也能一一对上）；
+ * 3) 都认不出的得到 null，由调用方分配新编号。
+ * 带了章但这一章已被别的 H1 用掉（复制粘贴出来的标题）或库里没有这一行的，按新标题处理，
+ * 不去按标题抢别人的行。返回值与 headings 一一对应。
+ */
+export function matchTextPoints<
+  Row extends { id: string; code: string; title: string },
+>(
+  headings: ReadonlyArray<{ code: string | null; title: string }>,
+  rows: ReadonlyArray<Row>,
+): Array<Row | null> {
+  const byCode = new Map(rows.map((row) => [row.code, row]));
+  const used = new Set<string>();
+  const result: Array<Row | null> = headings.map(() => null);
+
+  for (const [position, heading] of headings.entries()) {
+    if (!heading.code) continue;
+    const row = byCode.get(heading.code);
+    if (row && !used.has(row.id)) {
+      used.add(row.id);
+      result[position] = row;
+    }
+  }
+  for (const [position, heading] of headings.entries()) {
+    if (heading.code) continue;
+    const row = rows.find(
+      (candidate) =>
+        !used.has(candidate.id) && candidate.title === heading.title,
+    );
+    if (row) {
+      used.add(row.id);
+      result[position] = row;
+    }
+  }
+  return result;
+}
+
 /** 去掉所有学习点章：内容指纹不看章，只盖章不会让草稿变成"有改动"。 */
 export function stripLearningPointStamps(html: string): string {
   return html.replace(new RegExp(STAMP.source, 'gi'), '');
@@ -67,7 +108,8 @@ export function stripLearningPointStamps(html: string): string {
 
 /**
  * 按顺序给每个 H1 盖上学习点编号；已有的章先去掉再写，所以重复盖章结果不变。
- * codes 比 H1 少时，多出来的 H1 不带章。
+ * codes 比 H1 少时，多出来的 H1 不带章；带引号、尖括号等写进属性会破坏 HTML 的编号也不盖章
+ * （导入的编号可以是任意文字），这样的 H1 下次保存时按标题认人。
  */
 export function stampLearningPoints(
   html: string,
@@ -79,7 +121,7 @@ export function stampLearningPoints(
     (_whole, open: string, attributes: string, rest: string) => {
       const code = codes[position++];
       const kept = ` ${attributes}`.replace(STAMP, '').trim();
-      const stamp = code ? `data-lp="${code}"` : '';
+      const stamp = code && SAFE_CODE.test(code) ? `data-lp="${code}"` : '';
       const joined = [kept, stamp].filter(Boolean).join(' ');
       return `${open}${joined ? ` ${joined}` : ''}${rest}`;
     },

@@ -5,7 +5,6 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
 import * as XLSX from 'xlsx';
 import { PrismaService } from '../prisma/prisma.service';
@@ -33,7 +32,6 @@ import {
   type ValidatedMedia,
 } from './media-validate';
 import { CourseStorageService } from './storage.service';
-import { parseTextStructure } from './text-structure';
 import { categoryRef, EXHIBIT_FIELDS } from './localized-fields';
 import { parseLocalized } from '../common/i18n/localized';
 
@@ -51,76 +49,6 @@ function required(value: unknown, message: string): string {
 
 function upper(value: unknown): string {
   return typeof value === 'string' ? value.trim().toUpperCase() : '';
-}
-
-/**
- * 把文本中的 H1 同步为 TEXT Learning Point。
- * 标题不变的 LP 复用原 code，避免简单编辑导致学习进度 ID 漂移。
- */
-export async function syncTextLearningPoints(
-  client: PrismaService | Prisma.TransactionClient,
-  lessonId: string,
-  language: string,
-  html: string | null,
-): Promise<void> {
-  // 空标题的 H1 不成为 LP（完成度会提示 "Title can't be empty"）。
-  const points = parseTextStructure(html)
-    .filter((row) => row.title)
-    .map((row) => ({ heading: row.title, hasBody: row.hasBody }));
-  const existing = await client.learningPoint.findMany({
-    where: { lessonId, language },
-    orderBy: { sortOrder: 'asc' },
-  });
-  const codeByTitle = new Map(
-    existing
-      .filter((lp) => (lp.source as string) === 'TEXT')
-      .map((lp) => [lp.title, lp.code]),
-  );
-  const usedCodes = new Set(existing.map((lp) => lp.code));
-
-  await client.learningPoint.deleteMany({
-    where: { lessonId, language, source: 'TEXT' },
-  });
-
-  const nextCode = (title: string): string => {
-    const reused = codeByTitle.get(title);
-    if (reused) return reused;
-    let index = 1;
-    while (usedCodes.has(`T${index}`)) index++;
-    const code = `T${index}`;
-    usedCodes.add(code);
-    return code;
-  };
-
-  const codes: string[] = [];
-  for (const [index, point] of points.entries()) {
-    const code = nextCode(point.heading);
-    codes.push(code);
-    await client.learningPoint.create({
-      data: {
-        lessonId,
-        language,
-        code,
-        title: point.heading,
-        source: 'TEXT',
-        anchorHeading: point.heading,
-        sortOrder: index,
-      },
-    });
-  }
-
-  await client.lessonLocalization.updateMany({
-    where: { lessonId, language },
-    data: {
-      textLearningPoints: points.length
-        ? (points.map((point, index) => ({
-            code: codes[index],
-            heading: point.heading,
-            hasBody: point.hasBody,
-          })) as unknown as Prisma.InputJsonValue)
-        : Prisma.DbNull,
-    },
-  });
 }
 
 @Injectable()

@@ -1,4 +1,8 @@
-import { parseTextStructure, stampLearningPoints } from './text-structure';
+import {
+  matchTextPoints,
+  parseTextStructure,
+  stampLearningPoints,
+} from './text-structure';
 
 describe('parseTextStructure', () => {
   it('reads the learning point code the server stamped on a heading', () => {
@@ -86,6 +90,13 @@ describe('stampLearningPoints', () => {
     ).toBe('<h1 data-lp="T1">A</h1><h1>B</h1>');
   });
 
+  it('does not write a code that would break the attribute', () => {
+    expect(stampLearningPoints('<h1>A</h1>', ['T"1><b>'])).toBe('<h1>A</h1>');
+    expect(stampLearningPoints('<h1>A</h1>', ['T-1.2.3'])).toBe(
+      '<h1 data-lp="T-1.2.3">A</h1>',
+    );
+  });
+
   it('is the identity on text with no heading', () => {
     const html = '<p>No headings</p>';
     expect(stampLearningPoints(html, [])).toBe(html);
@@ -105,5 +116,104 @@ describe('stampLearningPoints', () => {
       'T4',
       'T5',
     ]);
+  });
+});
+
+describe('matchTextPoints', () => {
+  const rows = [
+    { id: 'r1', code: 'T1', title: 'Alpha' },
+    { id: 'r2', code: 'T2', title: 'Beta' },
+    { id: 'r3', code: 'T3', title: 'Beta' },
+  ];
+  const ids = (match: Array<{ id: string } | null>) =>
+    match.map((row) => row?.id ?? null);
+
+  it('recognises a heading by its stamp even after the title changed', () => {
+    expect(
+      ids(matchTextPoints([{ code: 'T2', title: 'Renamed' }], rows)),
+    ).toEqual(['r2']);
+  });
+
+  it('falls back to the first unused row with the same title, in order', () => {
+    expect(
+      ids(
+        matchTextPoints(
+          [
+            { code: null, title: 'Beta' },
+            { code: null, title: 'Beta' },
+            { code: null, title: 'Beta' },
+          ],
+          rows,
+        ),
+      ),
+    ).toEqual(['r2', 'r3', null]);
+  });
+
+  it('lets a stamp win over a title that another heading would also match', () => {
+    expect(
+      ids(
+        matchTextPoints(
+          [
+            { code: null, title: 'Beta' },
+            { code: 'T2', title: 'Beta' },
+          ],
+          rows,
+        ),
+      ),
+    ).toEqual(['r3', 'r2']);
+  });
+
+  it('uses a stamp only once', () => {
+    expect(
+      ids(
+        matchTextPoints(
+          [
+            { code: 'T1', title: 'Alpha' },
+            { code: 'T1', title: 'Alpha' },
+          ],
+          rows,
+        ),
+      ),
+    ).toEqual(['r1', null]);
+  });
+
+  it('does not recognise a stamp that no row carries and gives a new heading nothing', () => {
+    expect(
+      ids(
+        matchTextPoints(
+          [
+            { code: 'T9', title: 'Unknown' },
+            { code: null, title: 'New' },
+          ],
+          rows,
+        ),
+      ),
+    ).toEqual([null, null]);
+  });
+
+  it('matches an empty title to an empty row', () => {
+    expect(
+      ids(
+        matchTextPoints(
+          [{ code: null, title: '' }],
+          [{ id: 'e', code: 'T5', title: '' }],
+        ),
+      ),
+    ).toEqual(['e']);
+  });
+
+  it('keeps the codes of the headings that stayed when a new one is put first', () => {
+    expect(
+      ids(
+        matchTextPoints(
+          [
+            { code: null, title: 'Brand new' },
+            { code: 'T1', title: 'Alpha' },
+            { code: 'T2', title: 'Beta' },
+          ],
+          rows,
+        ),
+      ),
+    ).toEqual([null, 'r1', 'r2']);
   });
 });

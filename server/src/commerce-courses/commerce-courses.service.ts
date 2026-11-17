@@ -9,7 +9,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { CourseStorageService } from './storage.service';
 import { pickSummaryLocalization, summaryTitle } from './course-summary';
 import { HISTORY_ACTIONS, PublishingService } from './publishing.service';
-import { syncTextLearningPoints } from './course-authoring.service';
+import { syncTextPointsInTx } from './text-points';
 import { runCourseWrite, type CourseTx } from './course-write';
 import {
   assertCategoryBinding,
@@ -833,7 +833,8 @@ export class CommerceCoursesService {
             },
           });
           if (textHtml !== undefined) {
-            await syncTextLearningPoints(tx, lessonId, language, textHtml);
+            // 盖章后的正文在同一事务里存好；detail() 读回的就是盖过章的那份
+            await syncTextPointsInTx(tx, lessonId, language, textHtml);
           }
         }
       });
