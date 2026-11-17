@@ -25,6 +25,7 @@ import {
 } from './version-snapshot';
 import { TrialService } from './trial.service';
 import { snapshotContentHash, versionContentHash } from './content-hash';
+import { employeeNames, operatorName } from './employee-names';
 
 export interface VersionLabelResult {
   label: string;
@@ -634,32 +635,15 @@ export class PublishingService {
       }),
       this.prisma.courseAuthoringActivity.count({ where }),
     ]);
-    const actorIds = [
-      ...new Set(
-        rows
-          .map((row) => row.actorEmployeeId)
-          .filter((id): id is string => Boolean(id)),
-      ),
-    ];
-    const employees = actorIds.length
-      ? await this.prisma.employee.findMany({
-          where: { employeeId: { in: actorIds } },
-          select: { employeeId: true, loginEmail: true },
-        })
-      : [];
-    const nameById = new Map(
-      employees.map((employee) => [
-        employee.employeeId,
-        employee.loginEmail.split('@')[0] ?? employee.loginEmail,
-      ]),
+    const names = await employeeNames(
+      this.prisma,
+      rows.map((row) => row.actorEmployeeId),
     );
     return {
       items: rows.map((row) => ({
         id: row.id.toString(),
         time: row.createdAt,
-        operator: row.actorEmployeeId
-          ? (nameById.get(row.actorEmployeeId) ?? row.actorEmployeeId)
-          : 'System',
+        operator: operatorName(names, row.actorEmployeeId),
         action: row.action,
         versionNo: row.versionNo,
         detail: row.detail,

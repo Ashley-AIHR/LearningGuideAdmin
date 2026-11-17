@@ -38,7 +38,14 @@ describe('Commerce course workflow (e2e)', () => {
     const courses = await prisma.commerceCourse.findMany({
       where: {
         code: {
-          in: [code, `${code}-L`, `${code}-O`, `${code}-P`, `${code}-H`],
+          in: [
+            code,
+            `${code}-L`,
+            `${code}-O`,
+            `${code}-P`,
+            `${code}-H`,
+            `${code}-R`,
+          ],
         },
       },
     });
@@ -260,7 +267,11 @@ describe('Commerce course workflow (e2e)', () => {
       .send({ title: 'Eins' });
     expect(stale.status).toBe(409);
     expect(stale.body.error.code).toBe('COURSE_STALE');
-    expect(stale.body.error.message).toContain('Refresh');
+    expect(stale.body.error.message).toBe(
+      'This course was updated by e2e-admin. Reload to see the latest changes.',
+    );
+    expect(stale.body.error.details?.updatedByName).toBe('e2e-admin');
+    expect(typeof stale.body.error.details?.revision).toBe('number');
 
     // 刷新后用新 ETag 保存：成功
     const refreshed = await bob.get(`/api/backoffice/courses/${id}`);
