@@ -870,7 +870,7 @@ describe('AiChatService 学员端对话（2026-10-22）', () => {
                 heading: 'Newton cooling',
                 content: "T' = -k(T-r)",
                 score: 0.9,
-                tokenCount: 900,
+                tokenCount: 7700,
               },
             ]
           : [
@@ -1291,6 +1291,57 @@ describe('AiChatService 学员端对话（2026-10-22）', () => {
     }
   });
 
+  it.each([
+    ['admin', 'LECTURE'],
+    ['admin', 'SOCRATIC'],
+    ['learner', 'LECTURE'],
+    ['learner', 'SOCRATIC'],
+  ] as const)(
+    '%s 的 %s 请求同时收到积分定义及课时边界',
+    async (channel, mode) => {
+      let captured: LlmStreamOptions | undefined;
+      const { service, knowledge, configs } = setup(async function* (options) {
+        captured = options;
+        yield 'course answer';
+      });
+      (knowledge.retrieveChunks as jest.Mock).mockResolvedValue([
+        {
+          pageTitle: 'Lesson 1',
+          heading: 'Scope',
+          content:
+            'Formal integration is developed in Chapter 2, not Lesson 1.',
+          score: 0.4,
+          tokenCount: 800,
+        },
+        {
+          pageTitle: 'Modeling Life 全书七章精华提炼',
+          heading: '第二章：导数与积分',
+          content: '积分把小块累积起来；已知变化率可以还原总量。',
+          score: 0.2,
+          tokenCount: 380,
+        },
+      ]);
+      const input = { message: '什么是积分？', mode };
+      await collect(
+        channel === 'admin'
+          ? service.streamChat({ ...dto(), ...input })
+          : service.streamLearnerChat({
+              externalCourseId: 'modeling-life',
+              locale: 'zh-CN',
+              ...input,
+            }),
+      );
+      expect(captured?.messages[0].content).toContain('积分把小块累积起来');
+      expect(captured?.messages[0].content).toContain('not Lesson 1');
+      expect(captured?.messages[0].content).toContain('course_digest');
+      expect(configs.resolveTutorRun).toHaveBeenCalledWith(
+        COURSE_ID,
+        channel === 'admin' ? TEST_RELEASE : LIVE_RELEASE,
+        mode,
+      );
+    },
+  );
+
   it('检索结果都超出上下文预算时给出统一回复', async () => {
     const { service, knowledge } = setup(async function* () {
       await Promise.resolve();
@@ -1302,7 +1353,7 @@ describe('AiChatService 学员端对话（2026-10-22）', () => {
         heading: null,
         content: 'content',
         score: 0.9,
-        tokenCount: 1101,
+        tokenCount: 8001,
       },
     ]);
     await expect(collect(service.streamChat(dto()))).resolves.toContain(
