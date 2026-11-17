@@ -14,6 +14,7 @@ import { HISTORY_ACTIONS, PublishingService } from './publishing.service';
 import { syncTextLearningPoints } from './course-authoring.service';
 import { draftContentHash, versionContentHash } from './content-hash';
 import { categoryRef } from './localized-fields';
+import { withDefaultLanguageTests } from './lesson-tests';
 
 const CLEARED_DRAFT = {
   hasDraft: false,
@@ -209,7 +210,7 @@ export class CommerceCoursesService {
             exhibits: { include: { media: true, thumbnail: true } },
             readings: { orderBy: { sortOrder: 'asc' } },
             questions: { orderBy: { sortOrder: 'asc' } },
-            applicationTest: true,
+            applicationTests: true,
             learningPoints: { orderBy: { sortOrder: 'asc' } },
             triggers: true,
           },
@@ -231,11 +232,13 @@ export class CommerceCoursesService {
       ))
         ? CLEARED_DRAFT
         : null;
+    // 测试按语言保存；在 B14 之前页面仍只认默认内容语言的那一份（lesson.applicationTest）。
+    const shaped = withDefaultLanguageTests(course);
     return {
-      ...course,
+      ...shaped,
       category: categoryRef(course.category),
       ...draftState,
-      completeness: computeCompleteness(detailToCompletenessInput(course)),
+      completeness: computeCompleteness(detailToCompletenessInput(shaped)),
     };
   }
 

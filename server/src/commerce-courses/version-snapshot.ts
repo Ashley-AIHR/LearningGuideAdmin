@@ -1,5 +1,11 @@
 import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import {
+  formatApplicationCode,
+  formatKnowledgeCode,
+  lessonNumber,
+} from './code-allocator';
+import { defaultLanguageRows, defaultLanguageTest } from './lesson-tests';
 import type {
   CompletenessInput,
   ContentLesson,
@@ -112,12 +118,14 @@ export async function captureVersionSnapshot(
           triggers: true,
           readings: { orderBy: { sortOrder: 'asc' } },
           questions: { orderBy: { sortOrder: 'asc' } },
-          applicationTest: true,
+          applicationTests: true,
         },
       },
     },
   });
   if (!course) throw new Error(`Course ${courseId} not found`);
+  // 测试按语言存；快照在 B14 之前只带默认内容语言的那一份。
+  const testLanguage = course.defaultContentLanguage;
 
   return {
     formatVersion: 2,
@@ -187,24 +195,38 @@ export async function captureVersionSnapshot(
             whyRecommended: reading.whyRecommended,
             sortOrder: reading.sortOrder,
           })),
-          questions: lesson.questions.map((question) => ({
-            code: question.code,
-            question: question.question,
-            referenceAnswer: question.referenceAnswer,
-            sortOrder: question.sortOrder,
-            enabled: question.enabled,
-          })),
-          applicationTest: lesson.applicationTest
-            ? {
-                scenario: lesson.applicationTest.scenario,
-                referenceAnswer: lesson.applicationTest.referenceAnswer,
-                enabled: lesson.applicationTest.enabled,
-              }
-            : null,
+          questions: defaultLanguageRows(lesson.questions, testLanguage).map(
+            (question) => ({
+              code: question.code,
+              question: question.question,
+              referenceAnswer: question.referenceAnswer,
+              sortOrder: question.sortOrder,
+              enabled: question.enabled,
+            }),
+          ),
+          applicationTest: capturedTest(
+            defaultLanguageTest(lesson.applicationTests, testLanguage),
+          ),
         };
       }),
     },
   };
+}
+
+function capturedTest(
+  test: {
+    scenario: string;
+    referenceAnswer: string | null;
+    enabled: boolean;
+  } | null,
+): SnapshotLesson['applicationTest'] {
+  return test
+    ? {
+        scenario: test.scenario,
+        referenceAnswer: test.referenceAnswer,
+        enabled: test.enabled,
+      }
+    : null;
 }
 
 /**
@@ -405,11 +427,31 @@ export async function applyVersionSnapshotInTx(
         },
       });
     }
+    // 题目编号在课程内唯一：旧快照里的编号（每个课时都从 K-0001 起）可能已被别的课时占用，
+    // 占用了就按 K-{课时号}{序号} 顺延，没占用就保留快照里的编号。
+    const lessonNo = lessonNumber(lesson.code, lesson.sortOrder);
+    const takenKnowledge = new Set(
+      (
+        await tx.knowledgeQuestion.findMany({
+          where: { courseId },
+          select: { code: true },
+        })
+      ).map((row) => row.code),
+    );
+    let sequence = 0;
     for (const question of lesson.questions) {
+      let code = question.code;
+      while (!code || takenKnowledge.has(code)) {
+        sequence += 1;
+        code = formatKnowledgeCode(lessonNo, sequence);
+      }
+      takenKnowledge.add(code);
       await tx.knowledgeQuestion.create({
         data: {
           lessonId,
-          code: question.code,
+          courseId,
+          language: snapshot.course.defaultContentLanguage,
+          code,
           question: question.question,
           referenceAnswer: question.referenceAnswer,
           sortOrder: question.sortOrder,
@@ -418,9 +460,28 @@ export async function applyVersionSnapshotInTx(
       });
     }
     if (lesson.applicationTest) {
+      const takenApplication = new Set(
+        (
+          await tx.applicationTest.findMany({
+            where: { courseId },
+            select: { code: true },
+          })
+        ).map((row) => row.code),
+      );
+      let applicationSequence = 1;
+      while (
+        takenApplication.has(
+          formatApplicationCode(lessonNo, applicationSequence),
+        )
+      ) {
+        applicationSequence += 1;
+      }
       await tx.applicationTest.create({
         data: {
           lessonId,
+          courseId,
+          language: snapshot.course.defaultContentLanguage,
+          code: formatApplicationCode(lessonNo, applicationSequence),
           scenario: lesson.applicationTest.scenario,
           referenceAnswer: lesson.applicationTest.referenceAnswer,
           enabled: lesson.applicationTest.enabled,

@@ -5,6 +5,11 @@ import { PrismaService } from '../prisma/prisma.service';
 import type { PackageManifest, PackageExhibit } from './contracts/manifest';
 import { CourseStorageService } from './storage.service';
 import { COMMERCE_CONFIG, type CommerceCourseConfig } from './commerce.config';
+import {
+  formatApplicationCode,
+  formatKnowledgeCode,
+  lessonNumber,
+} from './code-allocator';
 import { validateMediaFile } from './media-validate';
 import { applyVersionSnapshot, type VersionSnapshot } from './version-snapshot';
 import { HISTORY_ACTIONS } from './publishing.service';
@@ -613,6 +618,7 @@ export class PackageImporter {
     // 课时
     const lessonIdByCode = new Map<string, string>();
     const lpIdByKey = new Map<string, string>();
+    const takenKnowledgeCodes = new Set<string>();
     for (const lesson of [...(course.lessons ?? [])].sort(
       (a, b) => a.order - b.order,
     )) {
@@ -723,14 +729,26 @@ export class PackageImporter {
         }
       }
 
-      // 知识测试
+      // 知识测试（包格式在 B14 之前不带语言：归默认内容语言；编号在课程内唯一，重复或为空的重新给）
       if (lesson.knowledgeTest?.questions?.length) {
         let order = 0;
+        let sequence = 0;
         for (const q of lesson.knowledgeTest.questions) {
+          let code = q.code;
+          while (!code || takenKnowledgeCodes.has(code)) {
+            sequence += 1;
+            code = formatKnowledgeCode(
+              lessonNumber(lesson.code, lesson.order ?? 0),
+              sequence,
+            );
+          }
+          takenKnowledgeCodes.add(code);
           await tx.knowledgeQuestion.create({
             data: {
               lessonId,
-              code: q.code,
+              courseId,
+              language: course.defaultContentLanguage,
+              code,
               question: q.question,
               referenceAnswer: q.referenceAnswer ?? null,
               sortOrder: order++,
@@ -743,6 +761,12 @@ export class PackageImporter {
         await tx.applicationTest.create({
           data: {
             lessonId,
+            courseId,
+            language: course.defaultContentLanguage,
+            code: formatApplicationCode(
+              lessonNumber(lesson.code, lesson.order ?? 0),
+              1,
+            ),
             scenario: lesson.applicationTest.scenario,
             referenceAnswer: lesson.applicationTest.referenceAnswer ?? null,
             enabled: true,

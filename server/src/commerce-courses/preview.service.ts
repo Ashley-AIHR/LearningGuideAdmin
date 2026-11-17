@@ -7,6 +7,7 @@ import {
   type VersionSnapshot,
 } from './version-snapshot';
 import { TrialService } from './trial.service';
+import { withDefaultLanguageTests } from './lesson-tests';
 import { categoryRef, EXHIBIT_FIELDS } from './localized-fields';
 import { parseLocalized, pickLocalized } from '../common/i18n/localized';
 
@@ -64,7 +65,7 @@ export class PreviewService {
         }),
       );
     } else {
-      const detail = await this.prisma.commerceCourse.findUnique({
+      const found = await this.prisma.commerceCourse.findUnique({
         where: { id: courseId },
         include: {
           localizations: true,
@@ -77,18 +78,19 @@ export class PreviewService {
               exhibits: { include: { media: true, thumbnail: true } },
               readings: { orderBy: { sortOrder: 'asc' } },
               questions: { orderBy: { sortOrder: 'asc' } },
-              applicationTest: true,
+              applicationTests: true,
               learningPoints: { orderBy: { sortOrder: 'asc' } },
               triggers: true,
             },
           },
         },
       });
-      if (!detail)
+      if (!found)
         throw new NotFoundException({
           code: 'COURSE_NOT_FOUND',
           message: 'Course not found',
         });
+      const detail = withDefaultLanguageTests(found);
       completeness = computeCompleteness(detailToCompletenessInput(detail));
       content = {
         code: detail.code,

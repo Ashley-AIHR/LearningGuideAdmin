@@ -1051,6 +1051,8 @@ model CommerceCourse {
   plans         CoursePlan[]
   ksCourse      Course?
   exhibits      Exhibit[]
+  knowledgeQuestions KnowledgeQuestion[]
+  applicationTests   ApplicationTest[]
 
   @@index([lifecycleStatus, updatedAt])
   @@index([liveStatus])
@@ -1087,7 +1089,7 @@ model Lesson {
   exhibits        Exhibit[]
   readings        RecommendedReading[]
   questions       KnowledgeQuestion[]
-  applicationTest ApplicationTest?
+  applicationTests ApplicationTest[]
   learningPoints  LearningPoint[]
   triggers        ExhibitTrigger[]
 
@@ -1108,6 +1110,9 @@ model LessonLocalization {
   textHtml             String?          @db.Text
   textLearningPoints   Json?
   legacyContents       Json?
+  /// 测试开关按 Content language 分别保存（PRD L421-L433）；关掉只是隐藏，题目保留
+  knowledgeTestEnabled   Boolean        @default(false)
+  applicationTestEnabled Boolean        @default(false)
 
   @@unique([lessonId, language])
 }
@@ -1185,25 +1190,39 @@ model RecommendedReading {
 }
 
 model KnowledgeQuestion {
-  id              String  @id @default(uuid())
+  id              String         @id @default(uuid())
   lessonId        String
-  lesson          Lesson  @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  lesson          Lesson         @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  /// 题目 ID 在 Course 内唯一（PRD L137，形如 K-0201）；见 code-allocator.ts
+  courseId        String
+  course          CommerceCourse @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  /// 题目属于哪种 Content language（PRD L421：内容跟随 Content language）
+  language        String
   code            String
-  question        String  @db.Text
-  referenceAnswer String? @db.Text
+  question        String         @db.Text
+  referenceAnswer String?        @db.Text
   sortOrder       Int
-  enabled         Boolean @default(true)
+  enabled         Boolean        @default(true)
 
-  @@unique([lessonId, code])
+  @@unique([courseId, code])
+  @@index([lessonId, language, sortOrder])
 }
 
 model ApplicationTest {
-  id              String  @id @default(uuid())
-  lessonId        String  @unique
-  lesson          Lesson  @relation(fields: [lessonId], references: [id], onDelete: Cascade)
-  scenario        String  @db.Text
-  referenceAnswer String? @db.Text
-  enabled         Boolean @default(true)
+  id              String         @id @default(uuid())
+  lessonId        String
+  lesson          Lesson         @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  courseId        String
+  course          CommerceCourse @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  language        String
+  /// Course 内唯一（PRD L138，形如 A-0201）
+  code            String
+  scenario        String         @db.Text
+  referenceAnswer String?        @db.Text
+  enabled         Boolean        @default(true)
+
+  @@unique([lessonId, language])
+  @@unique([courseId, code])
 }
 
 model TrialSetting {
@@ -1219,6 +1238,12 @@ model TrialSetting {
   // Re-confirm 判定基线：确认时所在课时的视频与文本截止点
   confirmedVideoAssetId     String?
   confirmedTextCutoffCode   String?
+  /// 试看按学习语言保存（PRD L460-L472）：只有"最后一个试看课时"那一行有值。
+  /// { "<language>": { "videoSeconds": 120, "textLpCode": "T2" } }，文本截止点按学习点编号（跨 Save / Restore 稳定）
+  cutoffs                   Json?
+  /// Re-confirm 判定基线（每个学习语言）：
+  /// { "<language>": { "videoAssetId": "...", "textLpCode": "T2", "textIndex": 2 } }，textIndex 从 1 起
+  confirmed                 Json?
   status                    TrialRowStatus @default(LOCKED)
   updatedAt                 DateTime       @updatedAt
 

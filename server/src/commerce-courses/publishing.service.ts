@@ -26,6 +26,7 @@ import {
 import { TrialService } from './trial.service';
 import { snapshotContentHash, versionContentHash } from './content-hash';
 import { employeeNames, operatorName } from './employee-names';
+import { withDefaultLanguageTests } from './lesson-tests';
 
 export interface VersionLabelResult {
   label: string;
@@ -115,7 +116,7 @@ export class PublishingService {
             exhibits: { include: { media: true, thumbnail: true } },
             readings: { orderBy: { sortOrder: 'asc' } },
             questions: { orderBy: { sortOrder: 'asc' } },
-            applicationTest: true,
+            applicationTests: true,
             learningPoints: { orderBy: { sortOrder: 'asc' } },
             triggers: true,
           },
@@ -127,7 +128,8 @@ export class PublishingService {
         code: 'COURSE_NOT_FOUND',
         message: 'Course not found',
       });
-    return course;
+    // 测试按语言存；在 B14 之前完整性只认默认内容语言的那一份。
+    return withDefaultLanguageTests(course);
   }
 
   /** 发布草稿：生成不可变版本，立即成为本环境线上版本。 */

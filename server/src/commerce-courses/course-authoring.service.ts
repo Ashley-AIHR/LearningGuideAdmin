@@ -9,7 +9,13 @@ import { Prisma } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
 import * as XLSX from 'xlsx';
 import { PrismaService } from '../prisma/prisma.service';
+import {
+  formatApplicationCode,
+  formatKnowledgeCode,
+  lessonNumber,
+} from './code-allocator';
 import { COMMERCE_CONFIG, type CommerceCourseConfig } from './commerce.config';
+import { defaultLanguageTest } from './lesson-tests';
 import { convertDocxToHtml } from './docx-to-html';
 import { mp4DurationSeconds } from './media-duration';
 import {
@@ -602,16 +608,35 @@ export class CourseAuthoringService {
     enabled: boolean,
     rows: Array<{ code?: string; question: string; referenceAnswer: string }>,
   ) {
-    await this.requireLesson(courseId, lessonId);
+    const lesson = await this.requireLesson(courseId, lessonId);
+    const language = await this.defaultLanguageOf(courseId);
     await this.prisma.$transaction(async (tx) => {
-      await tx.knowledgeQuestion.deleteMany({ where: { lessonId } });
+      await tx.knowledgeQuestion.deleteMany({ where: { lessonId, language } });
       if (enabled) {
+        // 过渡写法（B14 起改为 id/code 就地更新与计数器分配）：K-{课时号}{序号}，遇到本课程里已有的编号就顺延。
+        const taken = new Set(
+          (
+            await tx.knowledgeQuestion.findMany({
+              where: { courseId },
+              select: { code: true },
+            })
+          ).map((row) => row.code),
+        );
+        const lessonNo = lessonNumber(lesson.code, lesson.sortOrder);
+        let sequence = 0;
         for (const [index, row] of rows.entries()) {
+          let code: string;
+          do {
+            sequence += 1;
+            code = formatKnowledgeCode(lessonNo, sequence);
+          } while (taken.has(code));
+          taken.add(code);
           await tx.knowledgeQuestion.create({
             data: {
               lessonId,
-              code:
-                row.code?.trim() || `K-${String(index + 1).padStart(4, '0')}`,
+              courseId,
+              language,
+              code,
               question: required(
                 row.question,
                 `Question ${index + 1} is required.`,
@@ -638,14 +663,28 @@ export class CourseAuthoringService {
     lessonId: string,
     body: { enabled: boolean; scenario?: string; referenceAnswer?: string },
   ) {
-    await this.requireLesson(courseId, lessonId);
+    const lesson = await this.requireLesson(courseId, lessonId);
+    const language = await this.defaultLanguageOf(courseId);
     if (!body.enabled) {
-      await this.prisma.applicationTest.deleteMany({ where: { lessonId } });
+      await this.prisma.applicationTest.deleteMany({
+        where: { lessonId, language },
+      });
     } else {
+      // 过渡写法（B14 起改为按语言保存、关闭只隐藏）：首次创建时给 A-{课时号}{序号}。
+      const existing = await this.prisma.applicationTest.findUnique({
+        where: { lessonId_language: { lessonId, language } },
+        select: { id: true },
+      });
+      const code = existing
+        ? undefined
+        : await this.freeApplicationCode(courseId, lesson);
       await this.prisma.applicationTest.upsert({
-        where: { lessonId },
+        where: { lessonId_language: { lessonId, language } },
         create: {
           lessonId,
+          courseId,
+          language,
+          code: code as string,
           scenario: required(
             body.scenario,
             'Application question is required.',
@@ -822,9 +861,10 @@ export class CourseAuthoringService {
       }
     }
 
+    const defaultLanguage = await this.defaultLanguageOf(courseId);
     const lessons = await this.prisma.lesson.findMany({
       where: { courseId, archivedAt: null },
-      include: { applicationTest: true },
+      include: { applicationTests: true },
     });
     const lessonByCode = new Map(
       lessons.map((lesson) => [lesson.code, lesson]),
@@ -869,7 +909,10 @@ export class CourseAuthoringService {
         continue;
       }
       if (type === 'Application') {
-        if (lesson.applicationTest || applicationSeen.has(lessonCode)) {
+        if (
+          defaultLanguageTest(lesson.applicationTests, defaultLanguage) ||
+          applicationSeen.has(lessonCode)
+        ) {
           errors.push({
             row: rowNo,
             message: `${lessonCode} already has an Application Test`,
@@ -880,6 +923,9 @@ export class CourseAuthoringService {
         await this.prisma.applicationTest.create({
           data: {
             lessonId: lesson.id,
+            courseId,
+            language: defaultLanguage,
+            code: await this.freeApplicationCode(courseId, lesson),
             scenario: question,
             referenceAnswer,
             enabled: true,
@@ -887,12 +933,14 @@ export class CourseAuthoringService {
         });
       } else {
         const count = await this.prisma.knowledgeQuestion.count({
-          where: { lessonId: lesson.id },
+          where: { lessonId: lesson.id, language: defaultLanguage },
         });
         await this.prisma.knowledgeQuestion.create({
           data: {
             lessonId: lesson.id,
-            code: `K-${String(count + 1).padStart(4, '0')}`,
+            courseId,
+            language: defaultLanguage,
+            code: await this.freeKnowledgeCode(courseId, lesson),
             question,
             referenceAnswer,
             sortOrder: count,
@@ -954,6 +1002,52 @@ export class CourseAuthoringService {
         draftSourceVersionLabel: null,
       },
     });
+  }
+
+  private async defaultLanguageOf(courseId: string): Promise<string> {
+    const course = await this.prisma.commerceCourse.findUnique({
+      where: { id: courseId },
+      select: { defaultContentLanguage: true },
+    });
+    return course?.defaultContentLanguage ?? 'en-GB';
+  }
+
+  /** 过渡用：本课程里还没被占用的 A-{课时号}{序号}。 */
+  private async freeApplicationCode(
+    courseId: string,
+    lesson: { code: string; sortOrder: number },
+  ): Promise<string> {
+    const taken = new Set(
+      (
+        await this.prisma.applicationTest.findMany({
+          where: { courseId },
+          select: { code: true },
+        })
+      ).map((row) => row.code),
+    );
+    const lessonNo = lessonNumber(lesson.code, lesson.sortOrder);
+    let sequence = 1;
+    while (taken.has(formatApplicationCode(lessonNo, sequence))) sequence += 1;
+    return formatApplicationCode(lessonNo, sequence);
+  }
+
+  /** 过渡用：本课程里还没被占用的 K-{课时号}{序号}（第一个空位）。 */
+  private async freeKnowledgeCode(
+    courseId: string,
+    lesson: { code: string; sortOrder: number },
+  ): Promise<string> {
+    const taken = new Set(
+      (
+        await this.prisma.knowledgeQuestion.findMany({
+          where: { courseId },
+          select: { code: true },
+        })
+      ).map((row) => row.code),
+    );
+    const lessonNo = lessonNumber(lesson.code, lesson.sortOrder);
+    let sequence = 1;
+    while (taken.has(formatKnowledgeCode(lessonNo, sequence))) sequence += 1;
+    return formatKnowledgeCode(lessonNo, sequence);
   }
 
   private async requireLesson(courseId: string, lessonId: string) {
