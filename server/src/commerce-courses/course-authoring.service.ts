@@ -453,6 +453,8 @@ export class CourseAuthoringService {
     const exhibit = await this.prisma.exhibit.create({
       data: {
         lessonId,
+        courseId,
+        sortOrder: await this.nextExhibitOrder(lessonId),
         code,
         type: type as never,
         mediaAssetId: body.mediaAssetId ?? null,
@@ -982,6 +984,15 @@ export class CourseAuthoringService {
         message: 'Media asset not found.',
       });
     return asset;
+  }
+
+  private async nextExhibitOrder(lessonId: string): Promise<number> {
+    const last = await this.prisma.exhibit.findFirst({
+      where: { lessonId },
+      orderBy: { sortOrder: 'desc' },
+      select: { sortOrder: true },
+    });
+    return (last?.sortOrder ?? 0) + 1;
   }
 
   private async nextExhibitCode(courseId: string): Promise<string> {

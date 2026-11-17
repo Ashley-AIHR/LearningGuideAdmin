@@ -178,10 +178,15 @@ export async function buildCoursePackageFromSnapshot(
                     title: lp.title,
                   })),
                 exhibitTriggers: lesson.triggers
-                  .filter((trigger) => trigger.language === loc.language)
+                  .filter(
+                    (trigger) =>
+                      trigger.language === loc.language &&
+                      trigger.exhibitCode !== null &&
+                      trigger.timeSeconds !== null,
+                  )
                   .map((trigger) => ({
-                    timeSeconds: trigger.timeSeconds,
-                    exhibitRef: trigger.exhibitCode,
+                    timeSeconds: trigger.timeSeconds as number,
+                    exhibitRef: trigger.exhibitCode as string,
                   })),
               }
             : null;

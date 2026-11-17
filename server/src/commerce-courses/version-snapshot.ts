@@ -66,10 +66,11 @@ export interface SnapshotLesson {
     anchorHeading: string | null;
     sortOrder: number;
   }>;
+  /** 展品和时间点都可以还没填（没填完也可以保存），读者按 null 处理为"未选 / 未填"。 */
   triggers: Array<{
-    exhibitCode: string;
+    exhibitCode: string | null;
     language: string;
-    timeSeconds: number;
+    timeSeconds: number | null;
   }>;
   readings: Array<{
     language: string;
@@ -171,13 +172,13 @@ export async function captureVersionSnapshot(
             anchorHeading: lp.anchorHeading,
             sortOrder: lp.sortOrder,
           })),
-          triggers: lesson.triggers
-            .map((trigger) => ({
-              exhibitCode: exhibitCodeById.get(trigger.exhibitId) ?? '',
-              language: trigger.language,
-              timeSeconds: trigger.timeSeconds,
-            }))
-            .filter((trigger) => Boolean(trigger.exhibitCode)),
+          triggers: lesson.triggers.map((trigger) => ({
+            exhibitCode: trigger.exhibitId
+              ? (exhibitCodeById.get(trigger.exhibitId) ?? null)
+              : null,
+            language: trigger.language,
+            timeSeconds: trigger.timeSeconds,
+          })),
           readings: lesson.readings.map((reading) => ({
             language: reading.language,
             type: reading.type,
@@ -348,10 +349,12 @@ export async function applyVersionSnapshotInTx(
     }
 
     const exhibitIdByCode = new Map<string, string>();
-    for (const exhibit of lesson.exhibits) {
+    for (const [index, exhibit] of lesson.exhibits.entries()) {
       const created = await tx.exhibit.create({
         data: {
           lessonId,
+          courseId,
+          sortOrder: index + 1,
           code: exhibit.code,
           type: exhibit.type as never,
           mediaAssetId: exhibit.mediaAssetId,
@@ -378,17 +381,16 @@ export async function applyVersionSnapshotInTx(
       });
     }
     for (const trigger of lesson.triggers) {
-      const exhibitId = exhibitIdByCode.get(trigger.exhibitCode);
-      if (exhibitId) {
-        await tx.exhibitTrigger.create({
-          data: {
-            lessonId,
-            exhibitId,
-            language: trigger.language,
-            timeSeconds: trigger.timeSeconds,
-          },
-        });
-      }
+      await tx.exhibitTrigger.create({
+        data: {
+          lessonId,
+          exhibitId: trigger.exhibitCode
+            ? (exhibitIdByCode.get(trigger.exhibitCode) ?? null)
+            : null,
+          language: trigger.language,
+          timeSeconds: trigger.timeSeconds,
+        },
+      });
     }
     for (const reading of lesson.readings) {
       await tx.recommendedReading.create({

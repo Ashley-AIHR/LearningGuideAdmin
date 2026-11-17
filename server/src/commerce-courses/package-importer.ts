@@ -646,9 +646,11 @@ export class PackageImporter {
       for (const ex of lesson.exhibits ?? []) {
         const exhibitId = await this.createExhibit(
           tx,
+          courseId,
           lessonId,
           ex,
           mediaKeyMap,
+          exhibitIdByCode.size + 1,
         );
         exhibitIdByCode.set(ex.code, exhibitId);
       }
@@ -805,15 +807,19 @@ export class PackageImporter {
 
   private async createExhibit(
     tx: Prisma.TransactionClient,
+    courseId: string,
     lessonId: string,
     ex: PackageExhibit,
     mediaKeyMap: Map<string, ImportedMediaMeta>,
+    sortOrder: number,
   ): Promise<string> {
     const exhibitId = randomUUID();
     await tx.exhibit.create({
       data: {
         id: exhibitId,
         lessonId,
+        courseId,
+        sortOrder,
         code: ex.code,
         type: ex.type,
         mediaAssetId: ex.file

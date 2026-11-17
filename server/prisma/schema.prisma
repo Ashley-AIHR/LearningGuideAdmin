@@ -1050,6 +1050,7 @@ model CommerceCourse {
   authors       CommerceCourseAuthor[]
   plans         CoursePlan[]
   ksCourse      Course?
+  exhibits      Exhibit[]
 
   @@index([lifecycleStatus, updatedAt])
   @@index([liveStatus])
@@ -1115,7 +1116,12 @@ model Exhibit {
   id               String           @id @default(uuid())
   lessonId         String
   lesson           Lesson           @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  /// 展品 ID 在 Course 内唯一（PRD L136）；由 CourseCodeCounter 分配，删除后不复用
+  courseId         String
+  course           CommerceCourse   @relation(fields: [courseId], references: [id], onDelete: Cascade)
   code             String
+  /// 同一课时内的展示顺序（拖拽排序）
+  sortOrder        Int              @default(0)
   type             ExhibitType
   mediaAssetId     String?
   media            CourseMediaAsset? @relation("ExhibitMedia", fields: [mediaAssetId], references: [id])
@@ -1126,7 +1132,11 @@ model Exhibit {
   createdAt        DateTime         @default(now())
   updatedAt        DateTime         @updatedAt
 
+  triggers ExhibitTrigger[]
+
   @@unique([lessonId, code])
+  @@unique([courseId, code])
+  @@index([lessonId, sortOrder])
 }
 
 model LearningPoint {
@@ -1148,11 +1158,16 @@ model ExhibitTrigger {
   id          String @id @default(uuid())
   lessonId    String
   lesson      Lesson @relation(fields: [lessonId], references: [id], onDelete: Cascade)
-  exhibitId   String
+  /// null = 还没选展品（没填完也可以保存，完整性规则报告 "Choose an exhibit"）
+  exhibitId   String?
+  exhibit     Exhibit? @relation(fields: [exhibitId], references: [id], onDelete: SetNull)
   language    String
-  timeSeconds Int
+  /// null = 还没填时间点
+  timeSeconds Int?
+  sortOrder   Int      @default(0)
 
-  @@unique([lessonId, exhibitId, language])
+  /// 同一展品可在多个时间点触发；NULL 值互不相同，所以未填的行不互相冲突
+  @@unique([lessonId, language, exhibitId, timeSeconds])
 }
 
 model RecommendedReading {
@@ -1210,6 +1225,13 @@ model TrialSetting {
   @@unique([courseId, lessonId])
 }
 
+/// 所有给人看的编号的计数器（见 code-allocator.ts）：只增不减，删除后的编号不再发放。
+/// key 例：course、lesson:<courseId>、exhibit:<courseId>、knowledge:<lessonId>、lp:<lessonId>:<language>:V
+model CourseCodeCounter {
+  key  String @id
+  next Int
+}
+
 model CourseVersion {
   id                  String         @id @default(uuid())
   courseId            String
@@ -1245,10 +1267,16 @@ model CourseMediaAsset {
   size         Int
   storageKey   String          @unique
   checksum     String?
+  /// 图片像素尺寸（上传时读取）；视频时长秒数；文件缺失或损坏的标记（media/check）
+  width           Int?
+  height          Int?
+  durationSeconds Int?
+  brokenAt        DateTime?
+  brokenReason    String?
   createdBy    String?
   createdAt    DateTime        @default(now())
 
-  coverFor         CommerceCourse?    @relation("CourseCover")
+  coverFor        CommerceCourse?    @relation("CourseCover")
   exhibitMedia     Exhibit[]          @relation("ExhibitMedia")
   exhibitThumbnail Exhibit[]          @relation("ExhibitThumbnail")
   lessonVideos     LessonLocalization[] @relation("LessonVideo")

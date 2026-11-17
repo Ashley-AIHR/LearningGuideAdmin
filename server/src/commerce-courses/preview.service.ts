@@ -140,7 +140,7 @@ export class PreviewService {
             exhibitCode:
               lesson.exhibits.find(
                 (exhibit) => exhibit.id === trigger.exhibitId,
-              )?.code ?? '',
+              )?.code ?? null,
             language: trigger.language,
             timeSeconds: trigger.timeSeconds,
           })),
@@ -204,10 +204,14 @@ export class PreviewService {
               pickLocalized(localized, 'description', defaultLanguage, '') ||
               null,
             triggers: lesson.triggers
-              .filter((trigger) => trigger.exhibitCode === exhibit.code)
+              .filter(
+                (trigger) =>
+                  trigger.exhibitCode === exhibit.code &&
+                  trigger.timeSeconds !== null,
+              )
               .map((trigger) => ({
                 language: trigger.language,
-                timeSeconds: trigger.timeSeconds,
+                timeSeconds: trigger.timeSeconds as number,
               })),
           };
         });
