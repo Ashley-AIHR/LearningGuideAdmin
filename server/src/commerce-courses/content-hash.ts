@@ -1,6 +1,7 @@
 import { createHash } from 'crypto';
 import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { stripLearningPointStamps } from './text-structure';
 import {
   captureVersionSnapshot,
   type SnapshotLesson,
@@ -73,7 +74,12 @@ function lessonView(lesson: SnapshotLesson, asset: AssetKey) {
     code: lesson.code,
     sortOrder: lesson.sortOrder,
     localizations: sorted(lesson.localizations, (l) => l.language).map(
-      (loc) => ({ ...loc, videoAssetId: asset(loc.videoAssetId) }),
+      (loc) => ({
+        ...loc,
+        videoAssetId: asset(loc.videoAssetId),
+        textHtml:
+          loc.textHtml === null ? null : stripLearningPointStamps(loc.textHtml),
+      }),
     ),
     exhibits: sorted(lesson.exhibits, (e) => e.code).map((exhibit) => ({
       ...exhibit,

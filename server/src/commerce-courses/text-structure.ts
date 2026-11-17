@@ -60,6 +60,11 @@ export function parseTextStructure(
   });
 }
 
+/** 去掉所有学习点章：内容指纹不看章，只盖章不会让草稿变成"有改动"。 */
+export function stripLearningPointStamps(html: string): string {
+  return html.replace(new RegExp(STAMP.source, 'gi'), '');
+}
+
 /**
  * 按顺序给每个 H1 盖上学习点编号；已有的章先去掉再写，所以重复盖章结果不变。
  * codes 比 H1 少时，多出来的 H1 不带章。

@@ -15,6 +15,7 @@ import {
   lessonNumber,
 } from './code-allocator';
 import { COMMERCE_CONFIG, type CommerceCourseConfig } from './commerce.config';
+import { runCourseWrite, type CourseTx } from './course-write';
 import { defaultLanguageTest } from './lesson-tests';
 import { convertDocxToHtml } from './docx-to-html';
 import { mp4DurationSeconds } from './media-duration';
@@ -28,6 +29,9 @@ import { CourseStorageService } from './storage.service';
 import { parseTextStructure } from './text-structure';
 import { categoryRef, EXHIBIT_FIELDS } from './localized-fields';
 import { parseLocalized } from '../common/i18n/localized';
+
+/** 读取可以走事务外的连接，也可以走写入事务里的连接。 */
+type Db = PrismaService | CourseTx;
 
 const READING_TYPES = new Set(['BOOK', 'ARTICLE', 'PAPER', 'OTHER']);
 const EXHIBIT_TYPES = new Set(['IMAGE', 'VIDEO', 'MODEL3D']);
@@ -230,22 +234,39 @@ export class CourseAuthoringService {
       { originalname: string; mimetype?: string; buffer: Buffer } | undefined,
   ) {
     const asset = await this.uploadMedia(courseId, file, 'COVER');
-    await this.prisma.commerceCourse.update({
-      where: { id: courseId },
-      data: {
-        coverAssetId: asset.id,
-        hasDraft: true,
-        lifecycleStatus: 'WORKING',
-      },
-    });
+    try {
+      await runCourseWrite(this.prisma, courseId, async (tx) => {
+        await tx.commerceCourse.update({
+          where: { id: courseId },
+          data: { coverAssetId: asset.id },
+        });
+      });
+    } catch (error) {
+      // 封面没绑上：刚传的文件和资产行不留下孤儿。
+      await this.discardUploadedAsset(courseId, asset);
+      throw error;
+    }
     return asset;
   }
 
+  private async discardUploadedAsset(
+    courseId: string,
+    asset: { id: string; extension: string },
+  ): Promise<void> {
+    await this.prisma.courseMediaAsset
+      .delete({ where: { id: asset.id } })
+      .catch(() => undefined);
+    await this.storage
+      .removeMedia(this.storage.mediaKey(courseId, asset.id, asset.extension))
+      .catch(() => undefined);
+  }
+
   async deleteCover(courseId: string) {
-    await this.assertCourse(courseId);
-    await this.prisma.commerceCourse.update({
-      where: { id: courseId },
-      data: { coverAssetId: null, hasDraft: true, lifecycleStatus: 'WORKING' },
+    await runCourseWrite(this.prisma, courseId, async (tx) => {
+      await tx.commerceCourse.update({
+        where: { id: courseId },
+        data: { coverAssetId: null },
+      });
     });
     return { deleted: true };
   }
@@ -256,7 +277,8 @@ export class CourseAuthoringService {
     language: string,
     assetId: string,
   ) {
-    const lesson = await this.requireLesson(courseId, lessonId);
+    // 下载、解析时长都放在事务外：事务里只做写入，不拿着课程锁等存储。
+    await this.requireLesson(courseId, lessonId);
     const asset = await this.requireAsset(courseId, assetId);
     if (asset.kind !== 'VIDEO') {
       throw new BadRequestException({
@@ -277,23 +299,25 @@ export class CourseAuthoringService {
             ),
           ) || null
         : null);
-    const existing = lesson.localizations.find(
-      (loc) => loc.language === language,
-    );
-    await this.prisma.lessonLocalization.upsert({
-      where: { lessonId_language: { lessonId, language } },
-      create: {
-        lessonId,
-        language,
-        title: existing?.title ?? lesson.code,
-        description: existing?.description ?? null,
-        videoAssetId: assetId,
-        videoDurationSeconds: duration,
-        textHtml: existing?.textHtml ?? null,
-      },
-      update: { videoAssetId: assetId, videoDurationSeconds: duration },
+    await runCourseWrite(this.prisma, courseId, async (tx) => {
+      const lesson = await this.requireLesson(courseId, lessonId, tx);
+      const existing = lesson.localizations.find(
+        (loc) => loc.language === language,
+      );
+      await tx.lessonLocalization.upsert({
+        where: { lessonId_language: { lessonId, language } },
+        create: {
+          lessonId,
+          language,
+          title: existing?.title ?? lesson.code,
+          description: existing?.description ?? null,
+          videoAssetId: assetId,
+          videoDurationSeconds: duration,
+          textHtml: existing?.textHtml ?? null,
+        },
+        update: { videoAssetId: assetId, videoDurationSeconds: duration },
+      });
     });
-    await this.touchCourse(courseId);
     return { assetId, durationSeconds: duration };
   }
 
@@ -303,44 +327,44 @@ export class CourseAuthoringService {
     language: string,
     input: Array<{ code?: string; title: string; timeSeconds: number }>,
   ) {
-    const lesson = await this.requireLesson(courseId, lessonId);
-    const duration =
-      lesson.localizations.find((loc) => loc.language === language)
-        ?.videoDurationSeconds ?? null;
-    const existing = lesson.learningPoints.filter(
-      (lp) => lp.language === language && lp.source === 'VIDEO',
-    );
-    const codeByTitle = new Map(existing.map((lp) => [lp.title, lp.code]));
-    const usedCodes = new Set(
-      lesson.learningPoints
-        .filter((lp) => lp.language === language)
-        .map((lp) => lp.code),
-    );
-    const points = input.map((point, index) => {
-      const title = required(
-        point.title,
-        `Learning point ${index + 1} needs a title.`,
+    return runCourseWrite(this.prisma, courseId, async (tx) => {
+      const lesson = await this.requireLesson(courseId, lessonId, tx);
+      const duration =
+        lesson.localizations.find((loc) => loc.language === language)
+          ?.videoDurationSeconds ?? null;
+      const existing = lesson.learningPoints.filter(
+        (lp) => lp.language === language && lp.source === 'VIDEO',
       );
-      const timeSeconds = Math.max(
-        0,
-        Math.round(Number(point.timeSeconds) || 0),
+      const codeByTitle = new Map(existing.map((lp) => [lp.title, lp.code]));
+      const usedCodes = new Set(
+        lesson.learningPoints
+          .filter((lp) => lp.language === language)
+          .map((lp) => lp.code),
       );
-      if (duration !== null && timeSeconds > duration) {
-        throw new BadRequestException({
-          code: 'LP_BEYOND_VIDEO',
-          message: `Learning point "${title}" is beyond the video length.`,
-        });
-      }
-      let code = point.code?.trim() || codeByTitle.get(title) || '';
-      if (!code) {
-        let n = 1;
-        while (usedCodes.has(`V${n}`)) n++;
-        code = `V${n}`;
-      }
-      usedCodes.add(code);
-      return { code, title, timeSeconds, sortOrder: index };
-    });
-    await this.prisma.$transaction(async (tx) => {
+      const points = input.map((point, index) => {
+        const title = required(
+          point.title,
+          `Learning point ${index + 1} needs a title.`,
+        );
+        const timeSeconds = Math.max(
+          0,
+          Math.round(Number(point.timeSeconds) || 0),
+        );
+        if (duration !== null && timeSeconds > duration) {
+          throw new BadRequestException({
+            code: 'LP_BEYOND_VIDEO',
+            message: `Learning point "${title}" is beyond the video length.`,
+          });
+        }
+        let code = point.code?.trim() || codeByTitle.get(title) || '';
+        if (!code) {
+          let n = 1;
+          while (usedCodes.has(`V${n}`)) n++;
+          code = `V${n}`;
+        }
+        usedCodes.add(code);
+        return { code, title, timeSeconds, sortOrder: index };
+      });
       await tx.learningPoint.deleteMany({
         where: { lessonId, language, source: 'VIDEO' },
       });
@@ -349,12 +373,8 @@ export class CourseAuthoringService {
           data: { lessonId, language, source: 'VIDEO', ...point },
         });
       }
-      await tx.commerceCourse.update({
-        where: { id: courseId },
-        data: { hasDraft: true, lifecycleStatus: 'WORKING' },
-      });
+      return { points };
     });
-    return { points };
   }
 
   async saveTriggers(
@@ -363,40 +383,39 @@ export class CourseAuthoringService {
     language: string,
     input: Array<{ exhibitId: string; timeSeconds: number }>,
   ) {
-    const lesson = await this.requireLesson(courseId, lessonId);
-    const duration =
-      lesson.localizations.find((loc) => loc.language === language)
-        ?.videoDurationSeconds ?? null;
-    const exhibitIds = new Set(lesson.exhibits.map((exhibit) => exhibit.id));
-    const rows = input.map((row, index) => {
-      if (!exhibitIds.has(row.exhibitId)) {
-        throw new BadRequestException({
-          code: 'EXHIBIT_NOT_FOUND',
-          message: `Exhibit ${index + 1} does not belong to this lesson.`,
-        });
-      }
-      const timeSeconds = Math.max(0, Math.round(Number(row.timeSeconds) || 0));
-      if (duration !== null && timeSeconds > duration) {
-        throw new BadRequestException({
-          code: 'TRIGGER_BEYOND_VIDEO',
-          message: `Exhibit trigger ${index + 1} is beyond the video length.`,
-        });
-      }
-      return { exhibitId: row.exhibitId, timeSeconds };
-    });
-    await this.prisma.$transaction(async (tx) => {
+    return runCourseWrite(this.prisma, courseId, async (tx) => {
+      const lesson = await this.requireLesson(courseId, lessonId, tx);
+      const duration =
+        lesson.localizations.find((loc) => loc.language === language)
+          ?.videoDurationSeconds ?? null;
+      const exhibitIds = new Set(lesson.exhibits.map((exhibit) => exhibit.id));
+      const rows = input.map((row, index) => {
+        if (!exhibitIds.has(row.exhibitId)) {
+          throw new BadRequestException({
+            code: 'EXHIBIT_NOT_FOUND',
+            message: `Exhibit ${index + 1} does not belong to this lesson.`,
+          });
+        }
+        const timeSeconds = Math.max(
+          0,
+          Math.round(Number(row.timeSeconds) || 0),
+        );
+        if (duration !== null && timeSeconds > duration) {
+          throw new BadRequestException({
+            code: 'TRIGGER_BEYOND_VIDEO',
+            message: `Exhibit trigger ${index + 1} is beyond the video length.`,
+          });
+        }
+        return { exhibitId: row.exhibitId, timeSeconds };
+      });
       await tx.exhibitTrigger.deleteMany({ where: { lessonId, language } });
       for (const row of rows) {
         await tx.exhibitTrigger.create({
           data: { lessonId, language, ...row },
         });
       }
-      await tx.commerceCourse.update({
-        where: { id: courseId },
-        data: { hasDraft: true, lifecycleStatus: 'WORKING' },
-      });
+      return { triggers: rows.length };
     });
-    return { triggers: rows.length };
   }
 
   async createExhibit(
@@ -411,33 +430,37 @@ export class CourseAuthoringService {
       localized?: unknown;
     },
   ) {
-    await this.requireLesson(courseId, lessonId);
-    const type = upper(body.type);
-    if (!EXHIBIT_TYPES.has(type)) {
-      throw new BadRequestException({
-        code: 'EXHIBIT_TYPE_INVALID',
-        message: 'Media type must be Image, Video or 3D.',
+    return runCourseWrite(this.prisma, courseId, async (tx) => {
+      await this.requireLesson(courseId, lessonId, tx);
+      const type = upper(body.type);
+      if (!EXHIBIT_TYPES.has(type)) {
+        throw new BadRequestException({
+          code: 'EXHIBIT_TYPE_INVALID',
+          message: 'Media type must be Image, Video or 3D.',
+        });
+      }
+      if (body.mediaAssetId) {
+        await this.requireAsset(courseId, body.mediaAssetId, tx);
+      }
+      if (body.thumbnailAssetId) {
+        await this.requireAsset(courseId, body.thumbnailAssetId, tx);
+      }
+      const code =
+        body.code?.trim() || (await this.nextExhibitCode(courseId, tx));
+      return tx.exhibit.create({
+        data: {
+          lessonId,
+          courseId,
+          sortOrder: await this.nextExhibitOrder(lessonId, tx),
+          code,
+          type: type as never,
+          mediaAssetId: body.mediaAssetId ?? null,
+          thumbnailAssetId: body.thumbnailAssetId ?? null,
+          sourceText: body.sourceText ?? null,
+          localized: parseLocalized(body.localized, EXHIBIT_FIELDS),
+        },
       });
-    }
-    if (body.mediaAssetId) await this.requireAsset(courseId, body.mediaAssetId);
-    if (body.thumbnailAssetId)
-      await this.requireAsset(courseId, body.thumbnailAssetId);
-    const code = body.code?.trim() || (await this.nextExhibitCode(courseId));
-    const exhibit = await this.prisma.exhibit.create({
-      data: {
-        lessonId,
-        courseId,
-        sortOrder: await this.nextExhibitOrder(lessonId),
-        code,
-        type: type as never,
-        mediaAssetId: body.mediaAssetId ?? null,
-        thumbnailAssetId: body.thumbnailAssetId ?? null,
-        sourceText: body.sourceText ?? null,
-        localized: parseLocalized(body.localized, EXHIBIT_FIELDS),
-      },
     });
-    await this.touchCourse(courseId);
-    return exhibit;
   }
 
   async updateExhibit(
@@ -452,75 +475,79 @@ export class CourseAuthoringService {
       localized?: unknown;
     },
   ) {
-    await this.requireLesson(courseId, lessonId);
-    const exhibit = await this.prisma.exhibit.findFirst({
-      where: { id: exhibitId, lessonId },
-    });
-    if (!exhibit)
-      throw new NotFoundException({
-        code: 'EXHIBIT_NOT_FOUND',
-        message: 'Exhibit not found.',
+    return runCourseWrite(this.prisma, courseId, async (tx) => {
+      await this.requireLesson(courseId, lessonId, tx);
+      const exhibit = await tx.exhibit.findFirst({
+        where: { id: exhibitId, lessonId },
       });
-    if (body.mediaAssetId) await this.requireAsset(courseId, body.mediaAssetId);
-    if (body.thumbnailAssetId)
-      await this.requireAsset(courseId, body.thumbnailAssetId);
-    const type = body.type ? upper(body.type) : null;
-    if (type && !EXHIBIT_TYPES.has(type)) {
-      throw new BadRequestException({
-        code: 'EXHIBIT_TYPE_INVALID',
-        message: 'Media type must be Image, Video or 3D.',
+      if (!exhibit)
+        throw new NotFoundException({
+          code: 'EXHIBIT_NOT_FOUND',
+          message: 'Exhibit not found.',
+        });
+      if (body.mediaAssetId) {
+        await this.requireAsset(courseId, body.mediaAssetId, tx);
+      }
+      if (body.thumbnailAssetId) {
+        await this.requireAsset(courseId, body.thumbnailAssetId, tx);
+      }
+      const type = body.type ? upper(body.type) : null;
+      if (type && !EXHIBIT_TYPES.has(type)) {
+        throw new BadRequestException({
+          code: 'EXHIBIT_TYPE_INVALID',
+          message: 'Media type must be Image, Video or 3D.',
+        });
+      }
+      return tx.exhibit.update({
+        where: { id: exhibitId },
+        data: {
+          ...(type ? { type: type as never } : {}),
+          ...(body.mediaAssetId !== undefined
+            ? { mediaAssetId: body.mediaAssetId }
+            : {}),
+          ...(body.thumbnailAssetId !== undefined
+            ? { thumbnailAssetId: body.thumbnailAssetId }
+            : {}),
+          ...(body.sourceText !== undefined
+            ? { sourceText: body.sourceText }
+            : {}),
+          ...(body.localized !== undefined
+            ? { localized: parseLocalized(body.localized, EXHIBIT_FIELDS) }
+            : {}),
+        },
       });
-    }
-    const updated = await this.prisma.exhibit.update({
-      where: { id: exhibitId },
-      data: {
-        ...(type ? { type: type as never } : {}),
-        ...(body.mediaAssetId !== undefined
-          ? { mediaAssetId: body.mediaAssetId }
-          : {}),
-        ...(body.thumbnailAssetId !== undefined
-          ? { thumbnailAssetId: body.thumbnailAssetId }
-          : {}),
-        ...(body.sourceText !== undefined
-          ? { sourceText: body.sourceText }
-          : {}),
-        ...(body.localized !== undefined
-          ? { localized: parseLocalized(body.localized, EXHIBIT_FIELDS) }
-          : {}),
-      },
     });
-    await this.touchCourse(courseId);
-    return updated;
   }
 
   async deleteExhibit(courseId: string, lessonId: string, exhibitId: string) {
-    const lesson = await this.requireLesson(courseId, lessonId);
-    const exhibit = lesson.exhibits.find((row) => row.id === exhibitId);
-    if (!exhibit)
-      throw new NotFoundException({
-        code: 'EXHIBIT_NOT_FOUND',
-        message: 'Exhibit not found.',
-      });
-    if (lesson.triggers.some((trigger) => trigger.exhibitId === exhibitId)) {
-      throw new ConflictException({
-        code: 'EXHIBIT_IN_USE',
-        message: 'Used in Video triggers. Remove the trigger first.',
-      });
-    }
-    const referencedInText = lesson.localizations.some(
-      (loc) =>
-        loc.textHtml?.includes(exhibitId) ||
-        loc.textHtml?.includes(`data-exhibit-code="${exhibit.code}"`),
-    );
-    if (referencedInText) {
-      throw new ConflictException({
-        code: 'EXHIBIT_IN_USE',
-        message: 'Used in text content. Remove it there first.',
-      });
-    }
-    await this.prisma.exhibit.delete({ where: { id: exhibitId } });
-    await this.touchCourse(courseId);
-    return { deleted: true };
+    return runCourseWrite(this.prisma, courseId, async (tx) => {
+      const lesson = await this.requireLesson(courseId, lessonId, tx);
+      const exhibit = lesson.exhibits.find((row) => row.id === exhibitId);
+      if (!exhibit)
+        throw new NotFoundException({
+          code: 'EXHIBIT_NOT_FOUND',
+          message: 'Exhibit not found.',
+        });
+      if (lesson.triggers.some((trigger) => trigger.exhibitId === exhibitId)) {
+        throw new ConflictException({
+          code: 'EXHIBIT_IN_USE',
+          message: 'Used in Video triggers. Remove the trigger first.',
+        });
+      }
+      const referencedInText = lesson.localizations.some(
+        (loc) =>
+          loc.textHtml?.includes(exhibitId) ||
+          loc.textHtml?.includes(`data-exhibit-code="${exhibit.code}"`),
+      );
+      if (referencedInText) {
+        throw new ConflictException({
+          code: 'EXHIBIT_IN_USE',
+          message: 'Used in text content. Remove it there first.',
+        });
+      }
+      await tx.exhibit.delete({ where: { id: exhibitId } });
+      return { deleted: true };
+    });
   }
 
   async saveReadings(
@@ -534,39 +561,35 @@ export class CourseAuthoringService {
       whyRecommended: string;
     }>,
   ) {
-    await this.requireLesson(courseId, lessonId);
-    const data = rows.map((row, index) => {
-      const type = upper(row.type);
-      if (!READING_TYPES.has(type)) {
-        throw new BadRequestException({
-          code: 'READING_TYPE_INVALID',
-          message: 'Type must be Book, Article, Paper or Other.',
-        });
-      }
-      return {
-        type: type as never,
-        title: required(row.title, `Reading ${index + 1} needs a title.`),
-        author: required(row.author, `Reading ${index + 1} needs an author.`),
-        whyRecommended: required(
-          row.whyRecommended,
-          `Reading ${index + 1} needs a recommendation.`,
-        ),
-        sortOrder: index,
-      };
-    });
-    await this.prisma.$transaction(async (tx) => {
+    return runCourseWrite(this.prisma, courseId, async (tx) => {
+      await this.requireLesson(courseId, lessonId, tx);
+      const data = rows.map((row, index) => {
+        const type = upper(row.type);
+        if (!READING_TYPES.has(type)) {
+          throw new BadRequestException({
+            code: 'READING_TYPE_INVALID',
+            message: 'Type must be Book, Article, Paper or Other.',
+          });
+        }
+        return {
+          type: type as never,
+          title: required(row.title, `Reading ${index + 1} needs a title.`),
+          author: required(row.author, `Reading ${index + 1} needs an author.`),
+          whyRecommended: required(
+            row.whyRecommended,
+            `Reading ${index + 1} needs a recommendation.`,
+          ),
+          sortOrder: index,
+        };
+      });
       await tx.recommendedReading.deleteMany({ where: { lessonId, language } });
       for (const row of data) {
         await tx.recommendedReading.create({
           data: { lessonId, language, ...row },
         });
       }
-      await tx.commerceCourse.update({
-        where: { id: courseId },
-        data: { hasDraft: true, lifecycleStatus: 'WORKING' },
-      });
+      return { count: data.length };
     });
-    return { count: data.length };
   }
 
   async saveKnowledgeTest(
@@ -575,9 +598,9 @@ export class CourseAuthoringService {
     enabled: boolean,
     rows: Array<{ code?: string; question: string; referenceAnswer: string }>,
   ) {
-    const lesson = await this.requireLesson(courseId, lessonId);
-    const language = await this.defaultLanguageOf(courseId);
-    await this.prisma.$transaction(async (tx) => {
+    return runCourseWrite(this.prisma, courseId, async (tx) => {
+      const lesson = await this.requireLesson(courseId, lessonId, tx);
+      const language = await this.defaultLanguageOf(courseId, tx);
       await tx.knowledgeQuestion.deleteMany({ where: { lessonId, language } });
       if (enabled) {
         // 过渡写法（B14 起改为 id/code 就地更新与计数器分配）：K-{课时号}{序号}，遇到本课程里已有的编号就顺延。
@@ -617,12 +640,8 @@ export class CourseAuthoringService {
           });
         }
       }
-      await tx.commerceCourse.update({
-        where: { id: courseId },
-        data: { hasDraft: true, lifecycleStatus: 'WORKING' },
-      });
+      return { count: enabled ? rows.length : 0 };
     });
-    return { count: enabled ? rows.length : 0 };
   }
 
   async saveApplicationTest(
@@ -630,53 +649,52 @@ export class CourseAuthoringService {
     lessonId: string,
     body: { enabled: boolean; scenario?: string; referenceAnswer?: string },
   ) {
-    const lesson = await this.requireLesson(courseId, lessonId);
-    const language = await this.defaultLanguageOf(courseId);
-    if (!body.enabled) {
-      await this.prisma.applicationTest.deleteMany({
-        where: { lessonId, language },
-      });
-    } else {
-      // 过渡写法（B14 起改为按语言保存、关闭只隐藏）：首次创建时给 A-{课时号}{序号}。
-      const existing = await this.prisma.applicationTest.findUnique({
-        where: { lessonId_language: { lessonId, language } },
-        select: { id: true },
-      });
-      const code = existing
-        ? undefined
-        : await this.freeApplicationCode(courseId, lesson);
-      await this.prisma.applicationTest.upsert({
-        where: { lessonId_language: { lessonId, language } },
-        create: {
-          lessonId,
-          courseId,
-          language,
-          code: code as string,
-          scenario: required(
-            body.scenario,
-            'Application question is required.',
-          ),
-          referenceAnswer: required(
-            body.referenceAnswer,
-            'Application reference answer is required.',
-          ),
-          enabled: true,
-        },
-        update: {
-          scenario: required(
-            body.scenario,
-            'Application question is required.',
-          ),
-          referenceAnswer: required(
-            body.referenceAnswer,
-            'Application reference answer is required.',
-          ),
-          enabled: true,
-        },
-      });
-    }
-    await this.touchCourse(courseId);
-    return { enabled: body.enabled };
+    return runCourseWrite(this.prisma, courseId, async (tx) => {
+      const lesson = await this.requireLesson(courseId, lessonId, tx);
+      const language = await this.defaultLanguageOf(courseId, tx);
+      if (!body.enabled) {
+        await tx.applicationTest.deleteMany({ where: { lessonId, language } });
+      } else {
+        // 过渡写法（B14 起改为按语言保存、关闭只隐藏）：首次创建时给 A-{课时号}{序号}。
+        const existing = await tx.applicationTest.findUnique({
+          where: { lessonId_language: { lessonId, language } },
+          select: { id: true },
+        });
+        const code = existing
+          ? undefined
+          : await this.freeApplicationCode(courseId, lesson, tx);
+        await tx.applicationTest.upsert({
+          where: { lessonId_language: { lessonId, language } },
+          create: {
+            lessonId,
+            courseId,
+            language,
+            code: code as string,
+            scenario: required(
+              body.scenario,
+              'Application question is required.',
+            ),
+            referenceAnswer: required(
+              body.referenceAnswer,
+              'Application reference answer is required.',
+            ),
+            enabled: true,
+          },
+          update: {
+            scenario: required(
+              body.scenario,
+              'Application question is required.',
+            ),
+            referenceAnswer: required(
+              body.referenceAnswer,
+              'Application reference answer is required.',
+            ),
+            enabled: true,
+          },
+        });
+      }
+      return { enabled: body.enabled };
+    });
   }
 
   async parseDocx(
@@ -726,76 +744,77 @@ export class CourseAuthoringService {
     file: { originalname: string; buffer: Buffer } | undefined,
   ) {
     const rows = this.readSheet(file);
-    const lessons = await this.prisma.lesson.findMany({
-      where: { courseId, archivedAt: null },
-      select: { id: true, code: true },
-    });
-    const lessonByCode = new Map(
-      lessons.map((lesson) => [lesson.code, lesson]),
-    );
-    const errors: Array<{ row: number; message: string }> = [];
-    let added = 0;
-    for (const [index, row] of rows.entries()) {
-      const lessonCode = this.cell(row, 'Lesson ID', 'LessonID');
-      const lesson = lessonByCode.get(lessonCode);
-      if (!lesson) {
-        errors.push({
-          row: index + 2,
-          message: `Lesson ID ${lessonCode || '(empty)'} doesn't exist`,
-        });
-        continue;
-      }
-      const type = upper(this.cell(row, 'Type'));
-      const title = this.cell(row, 'Title');
-      const author = this.cell(row, 'Author');
-      const why = this.cell(
-        row,
-        'Why we recommend it',
-        'Why we recommend',
-        'Why',
+    return runCourseWrite(this.prisma, courseId, async (tx) => {
+      const lessons = await tx.lesson.findMany({
+        where: { courseId, archivedAt: null },
+        select: { id: true, code: true },
+      });
+      const lessonByCode = new Map(
+        lessons.map((lesson) => [lesson.code, lesson]),
       );
-      if (!READING_TYPES.has(type)) {
-        errors.push({
-          row: index + 2,
-          message: 'Type must be Book, Article, Paper or Other',
+      const errors: Array<{ row: number; message: string }> = [];
+      let added = 0;
+      for (const [index, row] of rows.entries()) {
+        const lessonCode = this.cell(row, 'Lesson ID', 'LessonID');
+        const lesson = lessonByCode.get(lessonCode);
+        if (!lesson) {
+          errors.push({
+            row: index + 2,
+            message: `Lesson ID ${lessonCode || '(empty)'} doesn't exist`,
+          });
+          continue;
+        }
+        const type = upper(this.cell(row, 'Type'));
+        const title = this.cell(row, 'Title');
+        const author = this.cell(row, 'Author');
+        const why = this.cell(
+          row,
+          'Why we recommend it',
+          'Why we recommend',
+          'Why',
+        );
+        if (!READING_TYPES.has(type)) {
+          errors.push({
+            row: index + 2,
+            message: 'Type must be Book, Article, Paper or Other',
+          });
+          continue;
+        }
+        if (!title) {
+          errors.push({ row: index + 2, message: 'Title is empty' });
+          continue;
+        }
+        if (!author) {
+          errors.push({ row: index + 2, message: 'Author is empty' });
+          continue;
+        }
+        if (!why) {
+          errors.push({
+            row: index + 2,
+            message: 'Why we recommend it is empty',
+          });
+          continue;
+        }
+        const last = await tx.recommendedReading.findFirst({
+          where: { lessonId: lesson.id, language: 'en-GB' },
+          orderBy: { sortOrder: 'desc' },
+          select: { sortOrder: true },
         });
-        continue;
-      }
-      if (!title) {
-        errors.push({ row: index + 2, message: 'Title is empty' });
-        continue;
-      }
-      if (!author) {
-        errors.push({ row: index + 2, message: 'Author is empty' });
-        continue;
-      }
-      if (!why) {
-        errors.push({
-          row: index + 2,
-          message: 'Why we recommend it is empty',
+        await tx.recommendedReading.create({
+          data: {
+            lessonId: lesson.id,
+            language: 'en-GB',
+            type: type as never,
+            title,
+            author,
+            whyRecommended: why,
+            sortOrder: (last?.sortOrder ?? -1) + 1,
+          },
         });
-        continue;
+        added++;
       }
-      const last = await this.prisma.recommendedReading.findFirst({
-        where: { lessonId: lesson.id, language: 'en-GB' },
-        orderBy: { sortOrder: 'desc' },
-        select: { sortOrder: true },
-      });
-      await this.prisma.recommendedReading.create({
-        data: {
-          lessonId: lesson.id,
-          language: 'en-GB',
-          type: type as never,
-          title,
-          author,
-          whyRecommended: why,
-          sortOrder: (last?.sortOrder ?? -1) + 1,
-        },
-      });
-      added++;
-    }
-    await this.touchCourse(courseId);
-    return { added, errors };
+      return { added, errors };
+    });
   }
 
   async importUnderstanding(
@@ -828,97 +847,98 @@ export class CourseAuthoringService {
       }
     }
 
-    const defaultLanguage = await this.defaultLanguageOf(courseId);
-    const lessons = await this.prisma.lesson.findMany({
-      where: { courseId, archivedAt: null },
-      include: { applicationTests: true },
-    });
-    const lessonByCode = new Map(
-      lessons.map((lesson) => [lesson.code, lesson]),
-    );
-    const errors: Array<{ row: number; message: string }> = [];
-    const byLesson: Record<string, number> = {};
-    const applicationSeen = new Set<string>();
-    let added = 0;
-
-    for (const [index, row] of rows.entries()) {
-      const rowNo = index + 2;
-      const lessonCode = this.cell(row, 'Lesson ID', 'LessonID');
-      const lesson = lessonByCode.get(lessonCode);
-      if (singleLessonId && lesson?.id !== singleLessonId) continue;
-      if (!lesson) {
-        errors.push({
-          row: rowNo,
-          message: `Lesson ID ${lessonCode || '(empty)'} doesn't exist`,
-        });
-        continue;
-      }
-      const type = this.cell(row, 'Type');
-      const question = this.cell(row, 'Question');
-      const referenceAnswer = this.cell(
-        row,
-        'Reference answer',
-        'Reference Answer',
+    return runCourseWrite(this.prisma, courseId, async (tx) => {
+      const defaultLanguage = await this.defaultLanguageOf(courseId, tx);
+      const lessons = await tx.lesson.findMany({
+        where: { courseId, archivedAt: null },
+        include: { applicationTests: true },
+      });
+      const lessonByCode = new Map(
+        lessons.map((lesson) => [lesson.code, lesson]),
       );
-      if (type !== 'Knowledge' && type !== 'Application') {
-        errors.push({
-          row: rowNo,
-          message: 'Type must be Knowledge or Application',
-        });
-        continue;
-      }
-      if (!question) {
-        errors.push({ row: rowNo, message: 'Question is empty' });
-        continue;
-      }
-      if (!referenceAnswer) {
-        errors.push({ row: rowNo, message: 'Reference answer is empty' });
-        continue;
-      }
-      if (type === 'Application') {
-        if (
-          defaultLanguageTest(lesson.applicationTests, defaultLanguage) ||
-          applicationSeen.has(lessonCode)
-        ) {
+      const errors: Array<{ row: number; message: string }> = [];
+      const byLesson: Record<string, number> = {};
+      const applicationSeen = new Set<string>();
+      let added = 0;
+
+      for (const [index, row] of rows.entries()) {
+        const rowNo = index + 2;
+        const lessonCode = this.cell(row, 'Lesson ID', 'LessonID');
+        const lesson = lessonByCode.get(lessonCode);
+        if (singleLessonId && lesson?.id !== singleLessonId) continue;
+        if (!lesson) {
           errors.push({
             row: rowNo,
-            message: `${lessonCode} already has an Application Test`,
+            message: `Lesson ID ${lessonCode || '(empty)'} doesn't exist`,
           });
           continue;
         }
-        applicationSeen.add(lessonCode);
-        await this.prisma.applicationTest.create({
-          data: {
-            lessonId: lesson.id,
-            courseId,
-            language: defaultLanguage,
-            code: await this.freeApplicationCode(courseId, lesson),
-            scenario: question,
-            referenceAnswer,
-            enabled: true,
-          },
-        });
-      } else {
-        const count = await this.prisma.knowledgeQuestion.count({
-          where: { lessonId: lesson.id, language: defaultLanguage },
-        });
-        await this.prisma.knowledgeQuestion.create({
-          data: {
-            lessonId: lesson.id,
-            courseId,
-            language: defaultLanguage,
-            code: await this.freeKnowledgeCode(courseId, lesson),
-            question,
-            referenceAnswer,
-            sortOrder: count,
-          },
-        });
+        const type = this.cell(row, 'Type');
+        const question = this.cell(row, 'Question');
+        const referenceAnswer = this.cell(
+          row,
+          'Reference answer',
+          'Reference Answer',
+        );
+        if (type !== 'Knowledge' && type !== 'Application') {
+          errors.push({
+            row: rowNo,
+            message: 'Type must be Knowledge or Application',
+          });
+          continue;
+        }
+        if (!question) {
+          errors.push({ row: rowNo, message: 'Question is empty' });
+          continue;
+        }
+        if (!referenceAnswer) {
+          errors.push({ row: rowNo, message: 'Reference answer is empty' });
+          continue;
+        }
+        if (type === 'Application') {
+          if (
+            defaultLanguageTest(lesson.applicationTests, defaultLanguage) ||
+            applicationSeen.has(lessonCode)
+          ) {
+            errors.push({
+              row: rowNo,
+              message: `${lessonCode} already has an Application Test`,
+            });
+            continue;
+          }
+          applicationSeen.add(lessonCode);
+          await tx.applicationTest.create({
+            data: {
+              lessonId: lesson.id,
+              courseId,
+              language: defaultLanguage,
+              code: await this.freeApplicationCode(courseId, lesson, tx),
+              scenario: question,
+              referenceAnswer,
+              enabled: true,
+            },
+          });
+        } else {
+          const count = await tx.knowledgeQuestion.count({
+            where: { lessonId: lesson.id, language: defaultLanguage },
+          });
+          await tx.knowledgeQuestion.create({
+            data: {
+              lessonId: lesson.id,
+              courseId,
+              language: defaultLanguage,
+              code: await this.freeKnowledgeCode(courseId, lesson, tx),
+              question,
+              referenceAnswer,
+              sortOrder: count,
+            },
+          });
+        }
+        byLesson[lessonCode] = (byLesson[lessonCode] ?? 0) + 1;
+        added++;
       }
-      byLesson[lessonCode] = (byLesson[lessonCode] ?? 0) + 1;
-      added++;
-    }
-    if (added > 0) await this.touchCourse(courseId);
-    return { added, byLesson, errors };
+      return { added, byLesson, errors };
+    });
   }
 
   async downloadUnderstandingTemplate(courseId: string): Promise<string> {
@@ -958,21 +978,11 @@ export class CourseAuthoringService {
       });
   }
 
-  private async touchCourse(courseId: string) {
-    await this.prisma.commerceCourse.update({
-      where: { id: courseId },
-      data: {
-        hasDraft: true,
-        lifecycleStatus: 'WORKING',
-        draftSourceType: null,
-        draftSourceEnvironment: null,
-        draftSourceVersionLabel: null,
-      },
-    });
-  }
-
-  private async defaultLanguageOf(courseId: string): Promise<string> {
-    const course = await this.prisma.commerceCourse.findUnique({
+  private async defaultLanguageOf(
+    courseId: string,
+    db: Db = this.prisma,
+  ): Promise<string> {
+    const course = await db.commerceCourse.findUnique({
       where: { id: courseId },
       select: { defaultContentLanguage: true },
     });
@@ -983,10 +993,11 @@ export class CourseAuthoringService {
   private async freeApplicationCode(
     courseId: string,
     lesson: { code: string; sortOrder: number },
+    db: Db = this.prisma,
   ): Promise<string> {
     const taken = new Set(
       (
-        await this.prisma.applicationTest.findMany({
+        await db.applicationTest.findMany({
           where: { courseId },
           select: { code: true },
         })
@@ -1002,10 +1013,11 @@ export class CourseAuthoringService {
   private async freeKnowledgeCode(
     courseId: string,
     lesson: { code: string; sortOrder: number },
+    db: Db = this.prisma,
   ): Promise<string> {
     const taken = new Set(
       (
-        await this.prisma.knowledgeQuestion.findMany({
+        await db.knowledgeQuestion.findMany({
           where: { courseId },
           select: { code: true },
         })
@@ -1017,8 +1029,12 @@ export class CourseAuthoringService {
     return formatKnowledgeCode(lessonNo, sequence);
   }
 
-  private async requireLesson(courseId: string, lessonId: string) {
-    const lesson = await this.prisma.lesson.findFirst({
+  private async requireLesson(
+    courseId: string,
+    lessonId: string,
+    db: Db = this.prisma,
+  ) {
+    const lesson = await db.lesson.findFirst({
       where: { id: lessonId, courseId, archivedAt: null },
       include: {
         localizations: true,
@@ -1035,8 +1051,12 @@ export class CourseAuthoringService {
     return lesson;
   }
 
-  private async requireAsset(courseId: string, assetId: string) {
-    const asset = await this.prisma.courseMediaAsset.findFirst({
+  private async requireAsset(
+    courseId: string,
+    assetId: string,
+    db: Db = this.prisma,
+  ) {
+    const asset = await db.courseMediaAsset.findFirst({
       where: { id: assetId, courseId },
     });
     if (!asset)
@@ -1047,8 +1067,11 @@ export class CourseAuthoringService {
     return asset;
   }
 
-  private async nextExhibitOrder(lessonId: string): Promise<number> {
-    const last = await this.prisma.exhibit.findFirst({
+  private async nextExhibitOrder(
+    lessonId: string,
+    db: Db = this.prisma,
+  ): Promise<number> {
+    const last = await db.exhibit.findFirst({
       where: { lessonId },
       orderBy: { sortOrder: 'desc' },
       select: { sortOrder: true },
@@ -1056,8 +1079,11 @@ export class CourseAuthoringService {
     return (last?.sortOrder ?? 0) + 1;
   }
 
-  private async nextExhibitCode(courseId: string): Promise<string> {
-    const rows = await this.prisma.exhibit.findMany({
+  private async nextExhibitCode(
+    courseId: string,
+    db: Db = this.prisma,
+  ): Promise<string> {
+    const rows = await db.exhibit.findMany({
       where: { lesson: { courseId } },
       select: { code: true },
     });
