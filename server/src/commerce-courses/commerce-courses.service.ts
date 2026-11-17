@@ -23,13 +23,20 @@ import {
   parseLearningLanguages,
   parseLearningMode,
   parseLocalizationPatch,
+  parseOptionalLanguage,
   parseTitles,
   type CourseLanguage,
   type LearningMode,
   type LocalizationPatch,
 } from './course-info';
 import { categoryRef } from './localized-fields';
-import { allocateCourseCode, peekCourseCode } from './code-allocator';
+import {
+  allocate,
+  allocateCourseCode,
+  formatLessonCode,
+  lessonCounterKey,
+  peekCourseCode,
+} from './code-allocator';
 import { optionalString } from './input';
 import { withDefaultLanguageTests } from './lesson-tests';
 
@@ -58,6 +65,26 @@ export interface CourseUpdateBody {
   subtitle?: string | null;
   level?: string | null;
   categoryId?: string | null;
+}
+
+/** 新建课时请求体：新写法带 `titles`；旧写法 `title` + `language` 照常接受。 */
+export interface LessonCreateBody {
+  /** 已忽略：Lesson ID 由服务器分配。 */
+  code?: string;
+  language?: string;
+  title?: string;
+  titles?: Record<string, string>;
+}
+
+export interface LessonUpdateBody {
+  /** 只能和现有的一致；不同就 400 LESSON_ID_IMMUTABLE。 */
+  code?: string;
+  /** 已忽略：改位置用 reorder。 */
+  sortOrder?: number;
+  language?: string;
+  title?: string;
+  description?: string | null;
+  textHtml?: string | null;
 }
 
 /** 校验、整理过的更新字段。 */
@@ -669,10 +696,29 @@ export class CommerceCoursesService {
     return this.detail(id);
   }
 
-  async createLesson(
-    id: string,
-    body: { code?: string; language?: string; title: string },
-  ) {
+  /** 在已锁住课程的事务里取下一个 Lesson ID（L001、L002……）；跳过本课程里已经有的编号。 */
+  private async allocateLessonCode(tx: CourseTx, courseId: string) {
+    for (;;) {
+      const code = formatLessonCode(
+        await allocate(tx, lessonCounterKey(courseId)),
+      );
+      const taken = await tx.lesson.findUnique({
+        where: { courseId_code: { courseId, code } },
+        select: { id: true },
+      });
+      if (!taken) return code;
+    }
+  }
+
+  /**
+   * 新建课时：Lesson ID 由服务器分配（删除后不复用），位置排在启用课时的最后，
+   * 两种语言的课时信息各一行。课时名没填就留空，完整性规则报 Required，不替用户编一个。
+   * 旧请求体的 `title` + `language` 照常接受；`code` 不再由调用方指定。
+   */
+  async createLesson(id: string, body: LessonCreateBody) {
+    const titles = parseTitles(body.titles);
+    const legacyTitle = optionalString(body.title, 'title');
+    const requestedLanguage = parseOptionalLanguage(body.language, 'language');
     try {
       // 课程行在事务里已锁住，取序号和建课时之间不会有第二个请求插进来
       await runCourseWrite(this.prisma, id, async (tx) => {
@@ -680,21 +726,30 @@ export class CommerceCoursesService {
           where: { id },
           select: { defaultContentLanguage: true },
         });
-        const language = body.language || course.defaultContentLanguage;
+        const courseDefault = (COURSE_LANGUAGES as readonly string[]).includes(
+          course.defaultContentLanguage,
+        )
+          ? (course.defaultContentLanguage as CourseLanguage)
+          : DEFAULT_LANGUAGE;
+        const language = requestedLanguage ?? courseDefault;
+        if (titles[language] === undefined && legacyTitle !== undefined) {
+          titles[language] = legacyTitle;
+        }
         const last = await tx.lesson.findFirst({
-          where: { courseId: id },
+          where: { courseId: id, archivedAt: null },
           orderBy: { sortOrder: 'desc' },
           select: { sortOrder: true },
         });
-        const sortOrder = (last?.sortOrder ?? 0) + 1;
-        const code = body.code?.trim() || `L${sortOrder}`;
         await tx.lesson.create({
           data: {
             courseId: id,
-            code,
-            sortOrder,
+            code: await this.allocateLessonCode(tx, id),
+            sortOrder: (last?.sortOrder ?? 0) + 1,
             localizations: {
-              create: { language, title: body.title || code },
+              create: COURSE_LANGUAGES.map((courseLanguage) => ({
+                language: courseLanguage,
+                title: titles[courseLanguage] ?? '',
+              })),
             },
           },
         });
@@ -714,23 +769,21 @@ export class CommerceCoursesService {
     return this.detail(id);
   }
 
-  async updateLesson(
-    id: string,
-    lessonId: string,
-    body: {
-      code?: string;
-      sortOrder?: number;
-      language?: string;
-      title?: string;
-      description?: string | null;
-      textHtml?: string | null;
-    },
-  ) {
+  /**
+   * 改课时：Lesson ID 和位置不能通过编辑改（改位置用 reorder），发来的 `sortOrder` 忽略；
+   * 发来的 `code` 与现有的不同就整个请求 400，什么都不写。课时名清空就保持为空。
+   */
+  async updateLesson(id: string, lessonId: string, body: LessonUpdateBody) {
+    const code = optionalString(body.code, 'code');
+    const title = optionalString(body.title, 'title');
+    const description = nullableText(body.description, 'description');
+    const textHtml = nullableText(body.textHtml, 'textHtml');
+    const requestedLanguage = parseOptionalLanguage(body.language, 'language');
     try {
       await runCourseWrite(this.prisma, id, async (tx) => {
         const lesson = await tx.lesson.findUnique({
           where: { id: lessonId },
-          select: { id: true, courseId: true, archivedAt: true },
+          select: { id: true, code: true, courseId: true, archivedAt: true },
         });
         if (!lesson || lesson.courseId !== id || lesson.archivedAt) {
           throw new NotFoundException({
@@ -738,24 +791,26 @@ export class CommerceCoursesService {
             message: 'Lesson not found',
           });
         }
+        if (
+          code !== undefined &&
+          code.trim() &&
+          code.trim().toUpperCase() !== lesson.code.toUpperCase()
+        ) {
+          throw new BadRequestException({
+            code: 'LESSON_ID_IMMUTABLE',
+            message: 'Lesson ID cannot be changed.',
+            details: { field: 'code' },
+          });
+        }
         const course = await tx.commerceCourse.findUniqueOrThrow({
           where: { id },
           select: { defaultContentLanguage: true },
         });
-        const language = body.language || course.defaultContentLanguage;
-        await tx.lesson.update({
-          where: { id: lessonId },
-          data: {
-            ...(body.code !== undefined ? { code: body.code.trim() } : {}),
-            ...(body.sortOrder !== undefined
-              ? { sortOrder: body.sortOrder }
-              : {}),
-          },
-        });
+        const language = requestedLanguage ?? course.defaultContentLanguage;
         if (
-          body.title !== undefined ||
-          body.description !== undefined ||
-          body.textHtml !== undefined
+          title !== undefined ||
+          description !== undefined ||
+          textHtml !== undefined
         ) {
           // 只写本次提交的字段：先读后整行写回会在并发保存（例如标题与正文
           // 同时提交）时用旧值互相覆盖，把正文 textHtml 清空并连带删除文本学习点。
@@ -764,22 +819,18 @@ export class CommerceCoursesService {
             create: {
               lessonId,
               language,
-              title: body.title ?? 'Untitled',
-              description: body.description ?? null,
-              textHtml: body.textHtml ?? null,
+              title: title ?? '',
+              description: description ?? null,
+              textHtml: textHtml ?? null,
             },
             update: {
-              ...(body.title !== undefined ? { title: body.title } : {}),
-              ...(body.description !== undefined
-                ? { description: body.description }
-                : {}),
-              ...(body.textHtml !== undefined
-                ? { textHtml: body.textHtml }
-                : {}),
+              ...(title !== undefined ? { title } : {}),
+              ...(description !== undefined ? { description } : {}),
+              ...(textHtml !== undefined ? { textHtml } : {}),
             },
           });
-          if (body.textHtml !== undefined) {
-            await syncTextLearningPoints(tx, lessonId, language, body.textHtml);
+          if (textHtml !== undefined) {
+            await syncTextLearningPoints(tx, lessonId, language, textHtml);
           }
         }
       });
@@ -828,9 +879,21 @@ export class CommerceCoursesService {
         message: 'Lesson not found',
       });
     }
-    await tx.trialSetting.deleteMany({
-      where: { courseId: id, lessonId },
+    // 试看行不删：线上版本里这节课还在，试看设置要到 Publish 才一起变；
+    // 剩下的启用课时位置重排为 1..N，不留空档。
+    const remaining = await tx.lesson.findMany({
+      where: { courseId: id, archivedAt: null },
+      orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
+      select: { id: true, sortOrder: true },
     });
+    for (const [index, row] of remaining.entries()) {
+      if (row.sortOrder !== index + 1) {
+        await tx.lesson.update({
+          where: { id: row.id },
+          data: { sortOrder: index + 1 },
+        });
+      }
+    }
   }
 
   async reorderLessons(id: string, lessonIds: string[]) {
@@ -846,17 +909,30 @@ export class CommerceCoursesService {
     }
     // 只动本课程的课时：别的课程的课时 id 或不存在�?id 整批拒绝�?04），不留半截排序
     await runCourseWrite(this.prisma, id, async (tx) => {
+      const active = await tx.lesson.findMany({
+        where: { courseId: id, archivedAt: null },
+        select: { id: true },
+      });
+      const activeIds = new Set(active.map((row) => row.id));
+      if (lessonIds.some((lessonId) => !activeIds.has(lessonId))) {
+        throw new NotFoundException({
+          code: 'LESSON_NOT_FOUND',
+          message: 'Lesson not found',
+        });
+      }
+      // 要给出全部启用课时的新顺序：缺一个就 400，不留半截排序。
+      if (lessonIds.length !== activeIds.size) {
+        throw new BadRequestException({
+          code: 'LESSON_ORDER_INCOMPLETE',
+          message: 'List every lesson of the course exactly once.',
+          details: { expected: activeIds.size, received: lessonIds.length },
+        });
+      }
       for (const [index, lessonId] of lessonIds.entries()) {
-        const moved = await tx.lesson.updateMany({
-          where: { id: lessonId, courseId: id },
+        await tx.lesson.update({
+          where: { id: lessonId },
           data: { sortOrder: index + 1 },
         });
-        if (moved.count === 0) {
-          throw new NotFoundException({
-            code: 'LESSON_NOT_FOUND',
-            message: 'Lesson not found',
-          });
-        }
       }
     });
     return this.detail(id);

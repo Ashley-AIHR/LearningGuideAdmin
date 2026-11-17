@@ -39,6 +39,15 @@ export function parseLanguage(value: unknown, field: string): CourseLanguage {
   return oneOf(value, COURSE_LANGUAGES, field, { code: 'LANGUAGE_INVALID' });
 }
 
+/** 没传（undefined、null、空字符串）得到 undefined；传了就必须是能选的语言。 */
+export function parseOptionalLanguage(
+  value: unknown,
+  field: string,
+): CourseLanguage | undefined {
+  if (value === undefined || value === null || value === '') return undefined;
+  return parseLanguage(value, field);
+}
+
 /** 没传（或空）得到 undefined；传了就必须是三种模式之一，大小写不限。 */
 export function parseLearningMode(value: unknown): LearningMode | undefined {
   if (value === undefined || value === null || value === '') return undefined;

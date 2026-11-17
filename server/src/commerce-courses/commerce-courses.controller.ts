@@ -21,6 +21,8 @@ import {
   CommerceCoursesService,
   type CourseCreateBody,
   type CourseUpdateBody,
+  type LessonCreateBody,
+  type LessonUpdateBody,
 } from './commerce-courses.service';
 import { PackageJobsService } from './package-jobs.service';
 import { PackageWorker } from './package-worker';
@@ -306,10 +308,7 @@ export class CommerceCoursesController {
   @Post(':id/lessons')
   @UseInterceptors(DraftRevisionInterceptor)
   @HttpCode(201)
-  createLesson(
-    @Param('id') id: string,
-    @Body() body: { code?: string; language?: string; title: string },
-  ) {
+  createLesson(@Param('id') id: string, @Body() body: LessonCreateBody) {
     return this.courses.createLesson(id, body);
   }
 
@@ -329,15 +328,7 @@ export class CommerceCoursesController {
   updateLesson(
     @Param('id') id: string,
     @Param('lessonId') lessonId: string,
-    @Body()
-    body: {
-      code?: string;
-      sortOrder?: number;
-      language?: string;
-      title?: string;
-      description?: string | null;
-      textHtml?: string | null;
-    },
+    @Body() body: LessonUpdateBody,
   ) {
     return this.courses.updateLesson(id, lessonId, body);
   }

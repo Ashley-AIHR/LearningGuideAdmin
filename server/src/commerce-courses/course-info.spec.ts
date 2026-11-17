@@ -9,6 +9,7 @@ import {
   parseLearningLanguages,
   parseLearningMode,
   parseLocalizationPatch,
+  parseOptionalLanguage,
   parseTitles,
 } from './course-info';
 
@@ -39,6 +40,16 @@ describe('learning mode and languages', () => {
   it('refuses a language that is not offered', () => {
     expect(parseLanguage('zh-CN', 'language')).toBe('zh-CN');
     expect(codeOf(() => parseLanguage('fr-FR', 'language'))).toBe(
+      'LANGUAGE_INVALID',
+    );
+  });
+
+  it('treats an empty language as not sent and refuses an unknown one', () => {
+    expect(parseOptionalLanguage(undefined, 'language')).toBeUndefined();
+    expect(parseOptionalLanguage(null, 'language')).toBeUndefined();
+    expect(parseOptionalLanguage('', 'language')).toBeUndefined();
+    expect(parseOptionalLanguage('zh-CN', 'language')).toBe('zh-CN');
+    expect(codeOf(() => parseOptionalLanguage('fr-FR', 'language'))).toBe(
       'LANGUAGE_INVALID',
     );
   });

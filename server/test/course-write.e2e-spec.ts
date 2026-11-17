@@ -196,8 +196,8 @@ describe('Course write path (e2e)', () => {
         .send({ language: 'en-GB', readings: [READING] }),
     ]);
     expect([title.status, readings.status]).toEqual([200, 200]);
-    const localization = await prisma.lessonLocalization.findFirstOrThrow({
-      where: { lessonId: lesson.id },
+    const localization = await prisma.lessonLocalization.findUniqueOrThrow({
+      where: { lessonId_language: { lessonId: lesson.id, language: 'en-GB' } },
     });
     expect(localization.title).toBe('Both land');
     expect(

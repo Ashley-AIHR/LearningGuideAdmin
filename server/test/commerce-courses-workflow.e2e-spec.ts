@@ -352,7 +352,7 @@ describe('Commerce course workflow (e2e)', () => {
     expect(lessons.map((l) => l.sortOrder)).toEqual([1, 2]);
     expect(new Set(lessons.map((l) => l.code)).size).toBe(2);
 
-    // 改成另一节课已有的 code：409，标题也不会被写进去
+    // Lesson ID 由服务器分配、不能改：改成另一节课已有的 code 也是 400，标题也不会被写进去
     // （两次新建谁先拿到锁不固定，所以先记下第二节课原来的标题）
     const before = await prisma.lessonLocalization.findFirstOrThrow({
       where: { lessonId: lessons[1].id },
@@ -360,8 +360,8 @@ describe('Commerce course workflow (e2e)', () => {
     const dup: ErrorResponse = await agent
       .put(`/api/backoffice/courses/${id}/lessons/${lessons[1].id}`)
       .send({ code: lessons[0].code, title: 'Should not stick' });
-    expect(dup.status).toBe(409);
-    expect(dup.body.error.code).toBe('LESSON_CODE_DUPLICATE');
+    expect(dup.status).toBe(400);
+    expect(dup.body.error.code).toBe('LESSON_ID_IMMUTABLE');
     const title = await prisma.lessonLocalization.findFirst({
       where: { lessonId: lessons[1].id },
     });
