@@ -1,3 +1,4 @@
+import { pool, query } from './backoffice/lib/db';
 import { Logger, Module, ModuleMetadata, Provider } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
@@ -39,6 +40,15 @@ import { createPgHelpdeskQaSource } from './backoffice/modules/helpdesk/faqs/faq
 import type { FaqReleaseSnapshot } from './backoffice/modules/helpdesk/faqs/faqRelease';
 import { HELPDESK_RELEASE_ANSWERER } from './contracts/helpdesk-release-eval';
 import { createReleaseAnswerer } from './ai/helpdesk/release-answerer';
+import {
+  cachedFaqEmbedder,
+  sharedFaqVectorSearch,
+} from './backoffice/modules/helpdesk/faqs/faqVectors';
+import { createPgEvalCacheStore } from './backoffice/modules/helpdesk/faqs/release-check/evalCacheStore';
+import {
+  HELPDESK_SETTINGS,
+  readHelpdeskSetting,
+} from './contracts/helpdesk-settings';
 
 /**
  * Agent 读 KS 的方式：同进程起了 ks 角色、或没配 KS_BASE_URL 时直接读库；
@@ -86,6 +96,10 @@ function appModuleMetadata(roles: readonly AppRole[]): ModuleMetadata {
         ? [
             AiModule.register({
               adminApi: admin,
+              evaluationDb: {
+                provide: 'EVALUATION_DB',
+                useValue: { pool, query },
+              },
               learnerApi: agent,
               knowledge: knowledgeProvider(roles),
               files: FilesModule.register({ authoring: false }),
@@ -127,7 +141,8 @@ function appModuleMetadata(roles: readonly AppRole[]): ModuleMetadata {
                       }),
               },
               // 发布前的真流程抽样检查（owner 2026-11-03）：线上聊天同一个 HelpdeskSuggestService，钉在候选版本上；
-              // 测试里不组装（只跑检索检查、同步返回）
+              // 测试里不组装（只跑检索检查、同步返回）。分层结果缓存（helpdesk_eval_stage_cache）缺省开，
+              // HELPDESK_EVAL_CACHE=off 关；问句向量经缓存算，卡片向量与线上共用同一份内存索引
               ...(process.env.NODE_ENV === 'test'
                 ? {}
                 : {
@@ -136,11 +151,16 @@ function appModuleMetadata(roles: readonly AppRole[]): ModuleMetadata {
                       useFactory: () =>
                         createReleaseAnswerer({
                           runner: new PiStepRunner(),
+                          ...(readHelpdeskSetting(HELPDESK_SETTINGS.evalCache)
+                            ? { cache: createPgEvalCacheStore() }
+                            : {}),
                           qaFor: (version, snapshot) =>
                             createPgHelpdeskQaSource(
                               undefined,
                               undefined,
-                              undefined,
+                              sharedFaqVectorSearch().withEmbedder?.(
+                                cachedFaqEmbedder,
+                              ),
                               {
                                 version,
                                 snapshot: snapshot as FaqReleaseSnapshot,
