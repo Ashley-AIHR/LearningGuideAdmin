@@ -37,6 +37,24 @@ export interface ContentTrigger {
   timeSeconds?: number | null;
 }
 
+/** 展品（PRD 12.4 / §20 #16）。标题和说明按语言放在 localized 里：{ 'en-GB': { title, description } }。 */
+export interface ContentExhibit {
+  code: string;
+  type?: string | null;
+  mediaAssetId?: string | null;
+  thumbnailAssetId?: string | null;
+  localized?: unknown;
+}
+
+/** 延伸阅读（PRD 12.6 / §20 #19）：整门课只有一份英文列表。 */
+export interface ContentReading {
+  language: string;
+  type?: string | null;
+  title?: string | null;
+  author?: string | null;
+  whyRecommended?: string | null;
+}
+
 export interface ContentLesson {
   id: string;
   code: string;
@@ -45,6 +63,14 @@ export interface ContentLesson {
   localizations: ContentLessonLocalization[];
   learningPoints?: ContentLearningPoint[];
   triggers?: ContentTrigger[];
+  exhibits?: ContentExhibit[];
+  readings?: ContentReading[];
+  /**
+   * 测试的"启用"开关。快照还不带这两个开关时留空：
+   * 知识题按"有题目就算启用"，应用题按它自己的 enabled。
+   */
+  knowledgeEnabled?: boolean;
+  applicationEnabled?: boolean;
   questions?: Array<{
     code?: string | null;
     question?: string | null;
@@ -82,6 +108,8 @@ export interface CompletenessInput {
   lessons: ContentLesson[];
   trialEnabled: boolean;
   trialRows: ContentTrialRow[];
+  /** 文件已损坏或丢失的资产 ID（CourseMediaAsset.brokenAt 非空）。 */
+  brokenAssetIds?: ReadonlySet<string>;
 }
 
 export type IssueStep = 'COURSE_INFORMATION' | 'COURSE_CONTENT' | 'TRIAL';
@@ -123,6 +151,16 @@ export interface StepCompleteness {
   missing: string[];
 }
 
+export type PublishBlockerCode = 'COURSE_INFORMATION' | 'LESSON_STUDY';
+
+/** Publish 弹窗里"哪些课时还有空"的一行：用课时编号和位置，不带数据库 ID。 */
+export interface IncompleteLesson {
+  lessonId: string;
+  code: string;
+  position: number;
+  parts: IssuePart[];
+}
+
 export interface CourseCompleteness {
   steps: {
     courseInformation: StepCompleteness;
@@ -133,8 +171,12 @@ export interface CourseCompleteness {
   /** Publish 允许不完整，但必须满足：CI 完成 + 至少 1 个 Lesson 的 Study 完成 */
   canPublish: boolean;
   publishBlockers: string[];
+  /** 与 publishBlockers 一一对应的稳定代码，页面按它判断是哪一项挡住了发布。 */
+  publishBlockerCodes: PublishBlockerCode[];
   /** 所有没填完的内容，按步骤、课时顺序排列。 */
   issues: CompletenessIssue[];
+  /** 还有内容没填完的课时（含 Lesson info、Study、Understanding），按课时顺序。 */
+  incompleteLessons: IncompleteLesson[];
 }
 
 const MODE_HAS_VIDEO = (mode: string) => mode !== 'TEXT_ONLY';
@@ -143,11 +185,16 @@ const MODE_HAS_TEXT = (mode: string) => mode !== 'VIDEO_ONLY';
 /** Course Information 和 Lesson 的标题、描述始终中英文并列必填（PRD L301、L333、§20 #1 #6 #7）。 */
 const BILINGUAL_LANGUAGES = ['en-GB', 'zh-CN'] as const;
 
+const PARTS: IssuePart[] = ['LESSON_INFO', 'STUDY', 'UNDERSTANDING'];
+
 const REQUIRED = 'Required';
 const AT_LEAST_4 = 'At least 4 items';
 const AT_MOST_6 = 'At most 6 items';
 const H1_HINT =
   'No learning points found. Set each learning point title as Heading 1 (H1).';
+const FILE_BROKEN = 'This file is missing or damaged. Upload it again.';
+/** 延伸阅读只有一份英文列表（PRD L411）。 */
+const READING_LANGUAGE = 'en-GB';
 
 function text(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
@@ -165,6 +212,18 @@ function listOf(value: unknown): unknown[] {
 
 function videoId(loc: ContentLessonLocalization): string | null {
   return loc.videoAssetId ?? loc.video?.id ?? null;
+}
+
+/** 展品里某种语言的某个字段：localized 形如 { 'en-GB': { title, description } }。 */
+function localizedText(
+  localized: unknown,
+  language: string,
+  field: 'title' | 'description',
+): string {
+  if (!localized || typeof localized !== 'object') return '';
+  const entry = (localized as Record<string, unknown>)[language];
+  if (!entry || typeof entry !== 'object') return '';
+  return text((entry as Record<string, unknown>)[field]);
 }
 
 /** 600 → "10:00"（分钟不设上限）。 */
@@ -208,6 +267,8 @@ function courseInformationIssues(
 
   if (!input.categoryId) add('REQUIRED', 'category', REQUIRED);
   if (!input.coverAssetId) add('REQUIRED', 'cover', REQUIRED);
+  else if (input.brokenAssetIds?.has(input.coverAssetId))
+    add('FILE_BROKEN', 'cover', FILE_BROKEN);
   if (input.learningLanguages.length === 0)
     add('REQUIRED', 'learningLanguages', REQUIRED);
 
@@ -293,13 +354,16 @@ function lessonIssues(
     const loc: ContentLessonLocalization = found ?? { language };
 
     if (MODE_HAS_VIDEO(input.learningMode)) {
-      const hasVideo = Boolean(videoId(loc));
+      const currentVideo = videoId(loc);
+      const hasVideo = Boolean(currentVideo);
       const seconds = loc.videoDurationSeconds ?? 0;
       const length = hasVideo && seconds > 0 ? seconds : null;
       if (!hasVideo) {
         add('STUDY', 'VIDEO_REQUIRED', 'video', 'Video is required', {
           language,
         });
+      } else if (currentVideo && input.brokenAssetIds?.has(currentVideo)) {
+        add('STUDY', 'FILE_BROKEN', 'video', FILE_BROKEN, { language });
       } else if (length === null) {
         add(
           'STUDY',
@@ -402,32 +466,100 @@ function lessonIssues(
     }
   }
 
-  // Understanding
-  for (const [index, question] of (lesson.questions ?? []).entries()) {
-    const key = question.code || String(index + 1);
-    if (!text(question.question))
-      add('UNDERSTANDING', 'REQUIRED', `knowledge[${key}].question`, REQUIRED, {
-        rowKey: key,
-      });
-    if (!text(question.referenceAnswer))
-      add(
-        'UNDERSTANDING',
-        'REFERENCE_ANSWER_MISSING',
-        `knowledge[${key}].referenceAnswer`,
-        'Reference answer missing',
-        { rowKey: key },
-      );
+  // Exhibits：类型、文件、缩略图，以及每种学习语言的标题和说明
+  for (const exhibit of lesson.exhibits ?? []) {
+    const key = exhibit.code;
+    const base = `exhibits[${key}]`;
+    if (!text(exhibit.type))
+      add('STUDY', 'REQUIRED', `${base}.type`, REQUIRED, { rowKey: key });
+    for (const [field, assetId] of [
+      ['media', exhibit.mediaAssetId],
+      ['thumbnail', exhibit.thumbnailAssetId],
+    ] as const) {
+      if (!assetId) {
+        add('STUDY', 'REQUIRED', `${base}.${field}`, REQUIRED, { rowKey: key });
+      } else if (input.brokenAssetIds?.has(assetId)) {
+        add('STUDY', 'FILE_BROKEN', `${base}.${field}`, FILE_BROKEN, {
+          rowKey: key,
+        });
+      }
+    }
+    for (const language of input.learningLanguages) {
+      for (const field of ['title', 'description'] as const) {
+        if (!localizedText(exhibit.localized, language, field))
+          add('STUDY', 'REQUIRED', `${base}.${field}`, REQUIRED, {
+            language,
+            rowKey: key,
+          });
+      }
+    }
   }
-  if (lesson.applicationTest && lesson.applicationTest.enabled !== false) {
-    if (!text(lesson.applicationTest.scenario))
-      add('UNDERSTANDING', 'REQUIRED', 'application.scenario', REQUIRED);
-    if (!text(lesson.applicationTest.referenceAnswer))
-      add(
-        'UNDERSTANDING',
-        'REFERENCE_ANSWER_MISSING',
-        'application.referenceAnswer',
-        'Reference answer missing',
-      );
+
+  // Recommended reading：一份英文列表。旧版本里标成别的语言的行，在没有英文行时照样算数。
+  const allReadings = lesson.readings ?? [];
+  const english = allReadings.filter(
+    (row) => row.language === READING_LANGUAGE,
+  );
+  const readings = english.length > 0 ? english : allReadings;
+  if (readings.length === 0) add('STUDY', 'REQUIRED', 'readings', REQUIRED);
+  for (const [index, reading] of readings.entries()) {
+    for (const field of [
+      'type',
+      'title',
+      'author',
+      'whyRecommended',
+    ] as const) {
+      if (!text(reading[field]))
+        add('STUDY', 'REQUIRED', `readings[${index}].${field}`, REQUIRED, {
+          rowKey: String(index),
+        });
+    }
+  }
+
+  // Understanding：关闭的测试不产生任何提示；启用的测试要有题目，题和参考答案都要填
+  const questions = lesson.questions ?? [];
+  if (lesson.knowledgeEnabled !== false) {
+    if (lesson.knowledgeEnabled === true && questions.length === 0)
+      add('UNDERSTANDING', 'KNOWLEDGE_EMPTY', 'knowledge', REQUIRED);
+    for (const [index, question] of questions.entries()) {
+      const key = question.code || String(index + 1);
+      if (!text(question.question))
+        add(
+          'UNDERSTANDING',
+          'REQUIRED',
+          `knowledge[${key}].question`,
+          REQUIRED,
+          { rowKey: key },
+        );
+      if (!text(question.referenceAnswer))
+        add(
+          'UNDERSTANDING',
+          'REFERENCE_ANSWER_MISSING',
+          `knowledge[${key}].referenceAnswer`,
+          'Reference answer missing',
+          { rowKey: key },
+        );
+    }
+  }
+  const application = lesson.applicationTest;
+  if (lesson.applicationEnabled !== false) {
+    if (!application) {
+      if (lesson.applicationEnabled === true)
+        add('UNDERSTANDING', 'APPLICATION_MISSING', 'application', REQUIRED);
+    } else if (
+      lesson.applicationEnabled === true ||
+      application.enabled !== false
+    ) {
+      if (!text(application.scenario))
+        add('UNDERSTANDING', 'REQUIRED', 'application.scenario', REQUIRED);
+      if (!text(application.referenceAnswer))
+        add(
+          'UNDERSTANDING',
+          'REFERENCE_ANSWER_MISSING',
+          'application.referenceAnswer',
+          'Reference answer missing',
+        );
+    }
   }
   return issues;
 }
@@ -598,18 +730,35 @@ export function computeCompleteness(
 
   // ===== Publish gate（PRD §15）=====
   const publishBlockers: string[] = [];
-  if (!courseInformation.complete)
+  const publishBlockerCodes: PublishBlockerCode[] = [];
+  if (!courseInformation.complete) {
     publishBlockers.push('Complete Course Information first.');
+    publishBlockerCodes.push('COURSE_INFORMATION');
+  }
   if (!lessonResults.some((result) => result.studyComplete)) {
     publishBlockers.push('Complete at least 1 lesson first.');
+    publishBlockerCodes.push('LESSON_STUDY');
   }
+
+  const incompleteLessons: IncompleteLesson[] = lessonResults
+    .filter((result) => result.issues.length > 0)
+    .map((result) => ({
+      lessonId: result.lessonId,
+      code: result.code,
+      position: result.position,
+      parts: PARTS.filter((part) =>
+        result.issues.some((issue) => issue.part === part),
+      ),
+    }));
 
   return {
     steps: { courseInformation, content, trial },
     completedSteps,
     canPublish: publishBlockers.length === 0,
     publishBlockers,
+    publishBlockerCodes,
     issues: [...ciIssues, ...contentIssues, ...trialList],
+    incompleteLessons,
   };
 }
 

@@ -20,6 +20,7 @@ import {
   applyVersionSnapshotInTx,
   captureVersionSnapshot,
   completenessTrial,
+  loadBrokenAssetIds,
   snapshotToCompletenessInput,
   type VersionSnapshot,
 } from './version-snapshot';
@@ -83,12 +84,15 @@ export class PublishingService {
    * 所以课程详情、Publish 门禁和导出检查对同一份内容给出同样的 issues。
    */
   async completenessForDraft(courseId: string): Promise<CourseCompleteness> {
-    const [snapshot, trial] = await Promise.all([
+    const [snapshot, trial, brokenAssetIds] = await Promise.all([
       captureVersionSnapshot(this.prisma, courseId),
       this.trial.get(courseId),
+      loadBrokenAssetIds(this.prisma, courseId),
     ]);
     return computeCompleteness(
-      snapshotToCompletenessInput(snapshot, completenessTrial(trial)),
+      snapshotToCompletenessInput(snapshot, completenessTrial(trial), {
+        brokenAssetIds,
+      }),
     );
   }
 
@@ -136,6 +140,8 @@ export class PublishingService {
         code: 'PUBLISH_BLOCKED',
         message: completeness.publishBlockers.join(' '),
         blockers: completeness.publishBlockers,
+        blockerCodes: completeness.publishBlockerCodes,
+        incompleteLessons: completeness.incompleteLessons,
       });
     }
 
@@ -526,6 +532,7 @@ export class PublishingService {
       snapshotToCompletenessInput(
         live.snapshotData as unknown as VersionSnapshot,
         completenessTrial(trial),
+        { brokenAssetIds: await loadBrokenAssetIds(this.prisma, courseId) },
       ),
     );
     if (!canExport(completeness)) {

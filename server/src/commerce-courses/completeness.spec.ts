@@ -2,8 +2,10 @@ import {
   computeCompleteness,
   type CompletenessInput,
   type CompletenessIssue,
+  type ContentExhibit,
   type ContentLesson,
   type ContentLocalization,
+  type ContentReading,
 } from './completeness';
 
 function courseInfo(language: string): ContentLocalization {
@@ -44,8 +46,35 @@ function lessonOne(): ContentLesson {
       { language: 'en-GB', source: 'TEXT', code: 'T1', title: 'Heading' },
     ],
     triggers: [],
+    exhibits: [],
+    readings: [reading()],
     questions: [{ question: 'Q', referenceAnswer: 'A' }],
     applicationTest: { scenario: 'S', referenceAnswer: 'A', enabled: true },
+  };
+}
+
+function reading(change: Partial<ContentReading> = {}): ContentReading {
+  return {
+    language: 'en-GB',
+    type: 'BOOK',
+    title: 'A book',
+    author: 'An author',
+    whyRecommended: 'Because',
+    ...change,
+  };
+}
+
+function exhibit(change: Partial<ContentExhibit> = {}): ContentExhibit {
+  return {
+    code: 'E001',
+    type: 'IMAGE',
+    mediaAssetId: 'media-1',
+    thumbnailAssetId: 'thumb-1',
+    localized: {
+      'en-GB': { title: 'Map', description: 'A map' },
+      'zh-CN': { title: '地图', description: '一张地图' },
+    },
+    ...change,
   };
 }
 
@@ -558,6 +587,366 @@ describe('computeCompleteness', () => {
         }),
       ).toBeDefined();
       expect(result.steps.content.lessons[0].studyComplete).toBe(false);
+    });
+  });
+
+  describe('Exhibits', () => {
+    it('is happy with a complete exhibit', () => {
+      const result = computeCompleteness(
+        baseInput({
+          lessons: withLesson((lesson) => {
+            lesson.exhibits = [exhibit()];
+          }),
+        }),
+      );
+      expect(result.issues).toEqual([]);
+    });
+
+    it('makes Study Incomplete when an exhibit has no thumbnail', () => {
+      const result = computeCompleteness(
+        baseInput({
+          lessons: withLesson((lesson) => {
+            lesson.exhibits = [exhibit({ thumbnailAssetId: null })];
+          }),
+        }),
+      );
+      expect(
+        find(result.issues, {
+          part: 'STUDY',
+          field: 'exhibits[E001].thumbnail',
+          rowKey: 'E001',
+          message: 'Required',
+        }),
+      ).toBeDefined();
+      expect(result.steps.content.lessons[0].studyComplete).toBe(false);
+    });
+
+    it('flags a missing file and a missing type', () => {
+      const result = computeCompleteness(
+        baseInput({
+          lessons: withLesson((lesson) => {
+            lesson.exhibits = [exhibit({ mediaAssetId: null, type: '' })];
+          }),
+        }),
+      );
+      expect(
+        find(result.issues, { field: 'exhibits[E001].media' }),
+      ).toBeDefined();
+      expect(
+        find(result.issues, { field: 'exhibits[E001].type' }),
+      ).toBeDefined();
+    });
+
+    it('asks for a title and a description only in the learning languages', () => {
+      const bare = exhibit({
+        localized: { 'en-GB': { title: ' ', description: '' } },
+      });
+      const english = computeCompleteness(
+        baseInput({
+          lessons: withLesson((lesson) => {
+            lesson.exhibits = [bare];
+          }),
+        }),
+      );
+      expect(
+        english.issues.map((i) => `${i.language}|${i.field}`).sort(),
+      ).toEqual([
+        'en-GB|exhibits[E001].description',
+        'en-GB|exhibits[E001].title',
+      ]);
+
+      const both = computeCompleteness(
+        baseInput({
+          learningLanguages: ['en-GB', 'zh-CN'],
+          lessons: withLesson((lesson) => {
+            lesson.exhibits = [bare];
+            for (const loc of lesson.localizations) {
+              loc.videoAssetId = 'video-1';
+              loc.videoDurationSeconds = 600;
+              loc.textHtml = '<h1 data-lp="T1">H</h1><p>b</p>';
+            }
+            lesson.learningPoints = ['en-GB', 'zh-CN'].map((language) => ({
+              language,
+              source: 'VIDEO',
+              code: `V-${language}`,
+              title: 'x',
+              timeSeconds: 1,
+            }));
+          }),
+        }),
+      );
+      expect(
+        both.issues
+          .filter((i) => i.field === 'exhibits[E001].title')
+          .map((i) => i.language)
+          .sort(),
+      ).toEqual(['en-GB', 'zh-CN']);
+    });
+  });
+
+  describe('Recommended reading', () => {
+    it('makes Study Incomplete when the list is empty', () => {
+      const result = computeCompleteness(
+        baseInput({
+          lessons: withLesson((lesson) => {
+            lesson.readings = [];
+          }),
+        }),
+      );
+      expect(
+        find(result.issues, {
+          part: 'STUDY',
+          field: 'readings',
+          message: 'Required',
+        }),
+      ).toBeDefined();
+      expect(result.steps.content.lessons[0].studyComplete).toBe(false);
+    });
+
+    it('flags a reading without an author, and one without a reason', () => {
+      const result = computeCompleteness(
+        baseInput({
+          lessons: withLesson((lesson) => {
+            lesson.readings = [
+              reading(),
+              reading({ author: '  ' }),
+              reading({ whyRecommended: null }),
+              reading({ type: '', title: '' }),
+            ];
+          }),
+        }),
+      );
+      expect(result.issues.map((i) => i.field).sort()).toEqual([
+        'readings[1].author',
+        'readings[2].whyRecommended',
+        'readings[3].title',
+        'readings[3].type',
+      ]);
+    });
+
+    it('still counts readings that an older version stored under another language', () => {
+      const result = computeCompleteness(
+        baseInput({
+          lessons: withLesson((lesson) => {
+            lesson.readings = [reading({ language: 'zh-CN' })];
+          }),
+        }),
+      );
+      expect(result.issues).toEqual([]);
+    });
+
+    it('reads the English list when the lesson has English rows next to others', () => {
+      const result = computeCompleteness(
+        baseInput({
+          lessons: withLesson((lesson) => {
+            lesson.readings = [
+              reading(),
+              reading({ language: 'zh-CN', author: '' }),
+            ];
+          }),
+        }),
+      );
+      expect(result.issues).toEqual([]);
+    });
+  });
+
+  describe('Understanding', () => {
+    it('is Incomplete when the knowledge test is enabled and has no question (MB12)', () => {
+      const result = computeCompleteness(
+        baseInput({
+          lessons: withLesson((lesson) => {
+            lesson.knowledgeEnabled = true;
+            lesson.questions = [];
+          }),
+        }),
+      );
+      expect(
+        find(result.issues, {
+          part: 'UNDERSTANDING',
+          field: 'knowledge',
+          message: 'Required',
+        }),
+      ).toBeDefined();
+      expect(result.steps.content.lessons[0].understandingComplete).toBe(false);
+      // Study is unaffected, so the course can still be published.
+      expect(result.steps.content.lessons[0].studyComplete).toBe(true);
+      expect(result.canPublish).toBe(true);
+    });
+
+    it('adds nothing for a disabled knowledge test', () => {
+      const result = computeCompleteness(
+        baseInput({
+          lessons: withLesson((lesson) => {
+            lesson.knowledgeEnabled = false;
+            lesson.questions = [];
+          }),
+        }),
+      );
+      expect(result.issues).toEqual([]);
+    });
+
+    it('is Incomplete when the application test is enabled and missing', () => {
+      const result = computeCompleteness(
+        baseInput({
+          lessons: withLesson((lesson) => {
+            lesson.applicationEnabled = true;
+            lesson.applicationTest = null;
+          }),
+        }),
+      );
+      expect(
+        find(result.issues, { part: 'UNDERSTANDING', field: 'application' }),
+      ).toBeDefined();
+    });
+
+    it('adds nothing for a disabled application test with empty fields', () => {
+      const result = computeCompleteness(
+        baseInput({
+          lessons: withLesson((lesson) => {
+            lesson.applicationTest = {
+              scenario: '',
+              referenceAnswer: '',
+              enabled: false,
+            };
+          }),
+        }),
+      );
+      expect(result.issues).toEqual([]);
+    });
+
+    it('says Required for an empty question and Reference answer missing for an empty answer', () => {
+      const result = computeCompleteness(
+        baseInput({
+          lessons: withLesson((lesson) => {
+            lesson.questions = [
+              { code: 'K-0101', question: '', referenceAnswer: 'A' },
+              { code: 'K-0102', question: 'Q', referenceAnswer: ' ' },
+            ];
+          }),
+        }),
+      );
+      expect(
+        find(result.issues, {
+          field: 'knowledge[K-0101].question',
+          message: 'Required',
+        }),
+      ).toBeDefined();
+      expect(
+        find(result.issues, {
+          field: 'knowledge[K-0102].referenceAnswer',
+          message: 'Reference answer missing',
+        }),
+      ).toBeDefined();
+    });
+  });
+
+  describe('Broken files', () => {
+    const broken = 'This file is missing or damaged. Upload it again.';
+
+    it('flags a broken cover, which blocks publishing', () => {
+      const result = computeCompleteness(
+        baseInput({ brokenAssetIds: new Set(['cover-1']) }),
+      );
+      expect(
+        find(result.issues, {
+          step: 'COURSE_INFORMATION',
+          code: 'FILE_BROKEN',
+          field: 'cover',
+          message: broken,
+        }),
+      ).toBeDefined();
+      expect(result.canPublish).toBe(false);
+    });
+
+    it('flags a broken lesson video for the language it belongs to', () => {
+      const result = computeCompleteness(
+        baseInput({ brokenAssetIds: new Set(['video-1']) }),
+      );
+      expect(
+        find(result.issues, {
+          part: 'STUDY',
+          code: 'FILE_BROKEN',
+          field: 'video',
+          language: 'en-GB',
+          message: broken,
+        }),
+      ).toBeDefined();
+      expect(result.steps.content.lessons[0].studyComplete).toBe(false);
+    });
+
+    it('flags a broken exhibit file and thumbnail', () => {
+      const result = computeCompleteness(
+        baseInput({
+          brokenAssetIds: new Set(['media-1', 'thumb-1']),
+          lessons: withLesson((lesson) => {
+            lesson.exhibits = [exhibit()];
+          }),
+        }),
+      );
+      expect(result.issues.map((i) => i.field).sort()).toEqual([
+        'exhibits[E001].media',
+        'exhibits[E001].thumbnail',
+      ]);
+      expect(result.issues.every((i) => i.code === 'FILE_BROKEN')).toBe(true);
+    });
+  });
+
+  describe('What the Publish dialog shows', () => {
+    it('lists each lesson with something missing by its code and position', () => {
+      const second = lessonOne();
+      second.id = 'lesson-2';
+      second.code = 'L002';
+      second.sortOrder = 2;
+      second.localizations[1].title = '';
+      second.readings = [];
+      const result = computeCompleteness(
+        baseInput({ lessons: [lessonOne(), second] }),
+      );
+      expect(result.incompleteLessons).toEqual([
+        {
+          lessonId: 'lesson-2',
+          code: 'L002',
+          position: 2,
+          parts: ['LESSON_INFO', 'STUDY'],
+        },
+      ]);
+    });
+
+    it('names the part of a lesson that only lacks Understanding', () => {
+      const result = computeCompleteness(
+        baseInput({
+          lessons: withLesson((lesson) => {
+            lesson.knowledgeEnabled = true;
+            lesson.questions = [];
+          }),
+        }),
+      );
+      expect(result.incompleteLessons.map((l) => l.parts)).toEqual([
+        ['UNDERSTANDING'],
+      ]);
+    });
+
+    it('gives each publish blocker a stable code next to its text', () => {
+      const none = computeCompleteness(baseInput());
+      expect(none.publishBlockerCodes).toEqual([]);
+
+      const info = computeCompleteness(baseInput({ coverAssetId: null }));
+      expect(info.publishBlockers).toEqual([
+        'Complete Course Information first.',
+      ]);
+      expect(info.publishBlockerCodes).toEqual(['COURSE_INFORMATION']);
+
+      const both = computeCompleteness(
+        baseInput({ coverAssetId: null, lessons: [] }),
+      );
+      expect(both.publishBlockerCodes).toEqual([
+        'COURSE_INFORMATION',
+        'LESSON_STUDY',
+      ]);
+      expect(both.publishBlockers).toEqual([
+        'Complete Course Information first.',
+        'Complete at least 1 lesson first.',
+      ]);
     });
   });
 

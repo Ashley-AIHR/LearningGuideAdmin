@@ -4,6 +4,7 @@ import { computeCompleteness } from './completeness';
 import {
   captureVersionSnapshot,
   completenessTrial,
+  loadBrokenAssetIds,
   snapshotToCompletenessInput,
   type VersionSnapshot,
 } from './version-snapshot';
@@ -59,14 +60,18 @@ export class PreviewService {
       content = snapshot.course;
       versionLabel = version.versionLabel;
       completeness = computeCompleteness(
-        snapshotToCompletenessInput(snapshot, completenessTrial(trial)),
+        snapshotToCompletenessInput(snapshot, completenessTrial(trial), {
+          brokenAssetIds: await loadBrokenAssetIds(this.prisma, courseId),
+        }),
       );
     } else {
       // 草稿预览和线上版本一样：先拍快照，内容和完成度都从快照来。
       const snapshot = await captureVersionSnapshot(this.prisma, courseId);
       content = snapshot.course;
       completeness = computeCompleteness(
-        snapshotToCompletenessInput(snapshot, completenessTrial(trial)),
+        snapshotToCompletenessInput(snapshot, completenessTrial(trial), {
+          brokenAssetIds: await loadBrokenAssetIds(this.prisma, courseId),
+        }),
       );
     }
 

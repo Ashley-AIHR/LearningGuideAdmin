@@ -537,6 +537,7 @@ export function completenessTrial(trial: {
 export function snapshotToCompletenessInput(
   snapshot: VersionSnapshot,
   trial: CompletenessTrial,
+  options: { brokenAssetIds?: ReadonlySet<string> } = {},
 ): CompletenessInput {
   const localizations: ContentLocalization[] = snapshot.course.localizations;
   const lessons: ContentLesson[] = snapshot.course.lessons.map((lesson) => ({
@@ -563,6 +564,14 @@ export function snapshotToCompletenessInput(
       exhibitCode: trigger.exhibitCode,
       timeSeconds: trigger.timeSeconds,
     })),
+    exhibits: (lesson.exhibits ?? []).map((exhibit) => ({
+      code: exhibit.code,
+      type: exhibit.type,
+      mediaAssetId: exhibit.mediaAssetId,
+      thumbnailAssetId: exhibit.thumbnailAssetId,
+      localized: exhibit.localized,
+    })),
+    readings: lesson.readings ?? [],
     questions: lesson.questions,
     applicationTest: lesson.applicationTest,
   }));
@@ -575,5 +584,21 @@ export function snapshotToCompletenessInput(
     lessons,
     trialEnabled: trial.trialEnabled,
     trialRows: trial.trialRows,
+    brokenAssetIds: options.brokenAssetIds,
   };
+}
+
+/**
+ * 这门课里文件已损坏或丢失的资产（CourseMediaAsset.brokenAt 非空）。
+ * 完成度据此把封面、视频、展品文件标成 "This file is missing or damaged"。
+ */
+export async function loadBrokenAssetIds(
+  prisma: PrismaService | Prisma.TransactionClient,
+  courseId: string,
+): Promise<ReadonlySet<string>> {
+  const rows = await prisma.courseMediaAsset.findMany({
+    where: { courseId, brokenAt: { not: null } },
+    select: { id: true },
+  });
+  return new Set(rows.map((row) => row.id));
 }

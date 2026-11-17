@@ -82,6 +82,59 @@ describe('Course completeness (e2e)', () => {
     );
   });
 
+  it('carries the blocker codes and the incomplete lessons in the Publish refusal', async () => {
+    const agent = await fixtures.admin();
+    const course = await fixtures.createCourse(agent, { title: 'Blockers' });
+    const lesson = await fixtures.createLesson(agent, course.id);
+    const refused: ErrorResponse = await agent
+      .post(`/api/backoffice/courses/${course.id}/publish`)
+      .send({});
+    expect(refused.status).toBe(409);
+    expect(refused.body.error.details).toMatchObject({
+      blockers: [
+        'Complete Course Information first.',
+        'Complete at least 1 lesson first.',
+      ],
+      blockerCodes: ['COURSE_INFORMATION', 'LESSON_STUDY'],
+      incompleteLessons: [
+        { lessonId: lesson.id, code: lesson.code, position: 1 },
+      ],
+    });
+  });
+
+  it('marks a cover file that is known to be broken', async () => {
+    const agent = await fixtures.admin();
+    const course = await fixtures.createCourse(agent, {
+      title: 'Broken cover',
+    });
+    const asset = await prisma.courseMediaAsset.create({
+      data: {
+        courseId: course.id,
+        kind: 'IMAGE',
+        originalName: 'cover.png',
+        mimeType: 'image/png',
+        extension: 'png',
+        size: 10,
+        storageKey: `e2e/${course.id}/cover.png`,
+        brokenAt: new Date(),
+        brokenReason: 'MISSING',
+      },
+    });
+    await prisma.commerceCourse.update({
+      where: { id: course.id },
+      data: { coverAssetId: asset.id },
+    });
+    const detail: SuccessResponse<{ completeness: CourseCompleteness }> =
+      await agent.get(`/api/backoffice/courses/${course.id}`).expect(200);
+    expect(detail.body.data.completeness.issues).toContainEqual(
+      expect.objectContaining({
+        code: 'FILE_BROKEN',
+        field: 'cover',
+        message: 'This file is missing or damaged. Upload it again.',
+      }),
+    );
+  });
+
   it('answers 404 for the completeness of a course that does not exist', async () => {
     await expect(
       app

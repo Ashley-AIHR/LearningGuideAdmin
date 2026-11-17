@@ -62,7 +62,16 @@ function snapshot(
           },
         ],
         triggers: [],
-        readings: [],
+        readings: [
+          {
+            language: 'en-GB',
+            type: 'BOOK',
+            title: 'A book',
+            author: 'An author',
+            whyRecommended: 'Because',
+            sortOrder: 0,
+          },
+        ],
         questions: [],
         applicationTest: null,
       },
@@ -139,6 +148,54 @@ describe('snapshotToCompletenessInput', () => {
     expect(result.issues.map((i) => i.field).sort()).toEqual([
       'triggers[0].exhibitId',
       'triggers[0].timeSeconds',
+    ]);
+  });
+
+  it('carries exhibits with their file ids and localized text', () => {
+    const result = computeCompleteness(
+      snapshotToCompletenessInput(
+        snapshot((course) => {
+          course.lessons[0].exhibits = [
+            {
+              code: 'E004',
+              type: 'IMAGE',
+              mediaAssetId: 'm1',
+              thumbnailAssetId: null,
+              sourceText: null,
+              localized: { 'en-GB': { title: 'Map', description: '' } },
+            },
+          ];
+        }),
+        noTrial,
+      ),
+    );
+    expect(result.issues.map((i) => i.field).sort()).toEqual([
+      'exhibits[E004].description',
+      'exhibits[E004].thumbnail',
+    ]);
+  });
+
+  it('carries the readings', () => {
+    const result = computeCompleteness(
+      snapshotToCompletenessInput(
+        snapshot((course) => {
+          course.lessons[0].readings[0].author = null;
+        }),
+        noTrial,
+      ),
+    );
+    expect(result.issues.map((i) => i.field)).toEqual(['readings[0].author']);
+  });
+
+  it('carries the files that are known to be broken', () => {
+    const result = computeCompleteness(
+      snapshotToCompletenessInput(snapshot(), noTrial, {
+        brokenAssetIds: new Set(['cover', 'v1']),
+      }),
+    );
+    expect(result.issues.map((i) => `${i.code}|${i.field}`).sort()).toEqual([
+      'FILE_BROKEN|cover',
+      'FILE_BROKEN|video',
     ]);
   });
 
