@@ -287,7 +287,10 @@ export class CommerceCoursesService {
             questions: { orderBy: { sortOrder: 'asc' } },
             applicationTests: true,
             learningPoints: { orderBy: { sortOrder: 'asc' } },
-            triggers: true,
+            // 先按时间再按保存顺序；没填时间的排在最后。
+            triggers: {
+              orderBy: [{ timeSeconds: 'asc' }, { sortOrder: 'asc' }],
+            },
           },
         },
       },

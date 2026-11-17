@@ -15,7 +15,14 @@ import {
   lessonNumber,
 } from './code-allocator';
 import { COMMERCE_CONFIG, type CommerceCourseConfig } from './commerce.config';
+import { parseLanguage } from './course-info';
 import { runCourseWrite, type CourseTx } from './course-write';
+import {
+  parseTriggers,
+  parseVideoPoints,
+  saveTriggersInTx,
+  saveVideoPointsInTx,
+} from './study-points';
 import { defaultLanguageTest } from './lesson-tests';
 import { convertDocxToHtml } from './docx-to-html';
 import { mp4DurationSeconds } from './media-duration';
@@ -325,55 +332,13 @@ export class CourseAuthoringService {
     courseId: string,
     lessonId: string,
     language: string,
-    input: Array<{ code?: string; title: string; timeSeconds: number }>,
+    input: unknown,
   ) {
+    const lang = parseLanguage(language, 'language');
+    const rows = parseVideoPoints(input);
     return runCourseWrite(this.prisma, courseId, async (tx) => {
-      const lesson = await this.requireLesson(courseId, lessonId, tx);
-      const duration =
-        lesson.localizations.find((loc) => loc.language === language)
-          ?.videoDurationSeconds ?? null;
-      const existing = lesson.learningPoints.filter(
-        (lp) => lp.language === language && lp.source === 'VIDEO',
-      );
-      const codeByTitle = new Map(existing.map((lp) => [lp.title, lp.code]));
-      const usedCodes = new Set(
-        lesson.learningPoints
-          .filter((lp) => lp.language === language)
-          .map((lp) => lp.code),
-      );
-      const points = input.map((point, index) => {
-        const title = required(
-          point.title,
-          `Learning point ${index + 1} needs a title.`,
-        );
-        const timeSeconds = Math.max(
-          0,
-          Math.round(Number(point.timeSeconds) || 0),
-        );
-        if (duration !== null && timeSeconds > duration) {
-          throw new BadRequestException({
-            code: 'LP_BEYOND_VIDEO',
-            message: `Learning point "${title}" is beyond the video length.`,
-          });
-        }
-        let code = point.code?.trim() || codeByTitle.get(title) || '';
-        if (!code) {
-          let n = 1;
-          while (usedCodes.has(`V${n}`)) n++;
-          code = `V${n}`;
-        }
-        usedCodes.add(code);
-        return { code, title, timeSeconds, sortOrder: index };
-      });
-      await tx.learningPoint.deleteMany({
-        where: { lessonId, language, source: 'VIDEO' },
-      });
-      for (const point of points) {
-        await tx.learningPoint.create({
-          data: { lessonId, language, source: 'VIDEO', ...point },
-        });
-      }
-      return { points };
+      await this.requireLesson(courseId, lessonId, tx);
+      return { points: await saveVideoPointsInTx(tx, lessonId, lang, rows) };
     });
   }
 
@@ -381,40 +346,14 @@ export class CourseAuthoringService {
     courseId: string,
     lessonId: string,
     language: string,
-    input: Array<{ exhibitId: string; timeSeconds: number }>,
+    input: unknown,
   ) {
+    const lang = parseLanguage(language, 'language');
+    const rows = parseTriggers(input);
     return runCourseWrite(this.prisma, courseId, async (tx) => {
       const lesson = await this.requireLesson(courseId, lessonId, tx);
-      const duration =
-        lesson.localizations.find((loc) => loc.language === language)
-          ?.videoDurationSeconds ?? null;
       const exhibitIds = new Set(lesson.exhibits.map((exhibit) => exhibit.id));
-      const rows = input.map((row, index) => {
-        if (!exhibitIds.has(row.exhibitId)) {
-          throw new BadRequestException({
-            code: 'EXHIBIT_NOT_FOUND',
-            message: `Exhibit ${index + 1} does not belong to this lesson.`,
-          });
-        }
-        const timeSeconds = Math.max(
-          0,
-          Math.round(Number(row.timeSeconds) || 0),
-        );
-        if (duration !== null && timeSeconds > duration) {
-          throw new BadRequestException({
-            code: 'TRIGGER_BEYOND_VIDEO',
-            message: `Exhibit trigger ${index + 1} is beyond the video length.`,
-          });
-        }
-        return { exhibitId: row.exhibitId, timeSeconds };
-      });
-      await tx.exhibitTrigger.deleteMany({ where: { lessonId, language } });
-      for (const row of rows) {
-        await tx.exhibitTrigger.create({
-          data: { lessonId, language, ...row },
-        });
-      }
-      return { triggers: rows.length };
+      return saveTriggersInTx(tx, lessonId, lang, rows, exhibitIds);
     });
   }
 

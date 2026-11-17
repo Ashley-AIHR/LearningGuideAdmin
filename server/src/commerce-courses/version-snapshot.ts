@@ -116,7 +116,9 @@ export async function captureVersionSnapshot(
           localizations: true,
           exhibits: true,
           learningPoints: { orderBy: { sortOrder: 'asc' } },
-          triggers: true,
+          triggers: {
+            orderBy: [{ timeSeconds: 'asc' }, { sortOrder: 'asc' }],
+          },
           readings: { orderBy: { sortOrder: 'asc' } },
           questions: { orderBy: { sortOrder: 'asc' } },
           applicationTests: true,

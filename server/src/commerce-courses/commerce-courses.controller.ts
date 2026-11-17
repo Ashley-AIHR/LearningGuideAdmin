@@ -449,7 +449,8 @@ export class CommerceCoursesController {
     @Body()
     body: {
       language: string;
-      points: Array<{ code?: string; title: string; timeSeconds: number }>;
+      /** 每行：id、code（认已有的行）、title、timeSeconds（可以空）。 */
+      points?: unknown;
     },
   ) {
     return this.authoring.saveVideoLearningPoints(
@@ -469,7 +470,8 @@ export class CommerceCoursesController {
     @Body()
     body: {
       language: string;
-      triggers: Array<{ exhibitId: string; timeSeconds: number }>;
+      /** 每行：exhibitId（可以还没选）、timeSeconds（可以空）。 */
+      triggers?: unknown;
     },
   ) {
     return this.authoring.saveTriggers(
