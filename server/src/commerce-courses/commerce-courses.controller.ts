@@ -556,13 +556,10 @@ export class CommerceCoursesController {
     @Param('lessonId') lessonId: string,
     @Body()
     body: {
-      language: string;
-      readings: Array<{
-        type: string;
-        title: string;
-        author: string;
-        whyRecommended: string;
-      }>;
+      /** 已忽略：推荐阅读只有一份英文列表，存成 en-GB。 */
+      language?: string;
+      /** 每行：id（已有的行）、type（Book / Article / Paper / Other）、title、author、whyRecommended。 */
+      readings?: unknown;
     },
   ) {
     return this.authoring.saveReadings(
@@ -592,6 +589,17 @@ export class CommerceCoursesController {
     @UploadedFile() file: { originalname: string; buffer: Buffer } | undefined,
   ) {
     return this.authoring.importReadings(id, file);
+  }
+
+  @Get(':id/readings/template')
+  async readingsTemplate(@Param('id') id: string, @Res() res: Response) {
+    const csv = await this.authoring.downloadReadingTemplate(id);
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader(
+      'Content-Disposition',
+      'attachment; filename="readings-template.csv"',
+    );
+    res.send(csv);
   }
 
   @Put(':id/lessons/:lessonId/knowledge-test')

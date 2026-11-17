@@ -5,8 +5,8 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import type { ReadingType } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
-import * as XLSX from 'xlsx';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   allocate,
@@ -29,6 +29,18 @@ import { defaultLanguageTest } from './lesson-tests';
 import { convertDocxToHtml } from './docx-to-html';
 import { exhibitInUseMessage, textUsages, videoUsages } from './exhibit-usage';
 import { requireArray } from './input';
+import {
+  checkReadingRows,
+  missingReadingColumns,
+  parseReadingList,
+  readingTemplateCsv,
+} from './reading-import';
+import {
+  normalizeHeader,
+  readSheetTable,
+  sheetCell,
+  type SheetTable,
+} from './sheet-table';
 import { mp4DurationSeconds } from './media-duration';
 import {
   MediaValidationError,
@@ -43,7 +55,8 @@ import { parseLocalized } from '../common/i18n/localized';
 /** 读取可以走事务外的连接，也可以走写入事务里的连接。 */
 type Db = PrismaService | CourseTx;
 
-const READING_TYPES = new Set(['BOOK', 'ARTICLE', 'PAPER', 'OTHER']);
+/** 推荐阅读只有一份英文列表（PRD L411）。 */
+const READING_LANGUAGE = 'en-GB';
 const EXHIBIT_TYPES = new Set(['IMAGE', 'VIDEO', 'MODEL3D']);
 
 function required(value: unknown, message: string): string {
@@ -481,45 +494,75 @@ export class CourseAuthoringService {
     });
   }
 
+  /**
+   * 推荐阅读就地保存。每个课时只有一份英文列表（PRD L411）：无论请求写的是哪种语言，都存成 en-GB，
+   * 课时里别的语言的旧行一并并入这一份。认出已有的行（请求里带 id）就改这一行，id 不变；
+   * 请求里没有的已有行删除；`sortOrder` 跟请求顺序。标题、作者、推荐理由没填也存，
+   * 只有 Type 不在 Book / Article / Paper / Other 里才 400（并且什么都不写）。
+   */
   async saveReadings(
     courseId: string,
     lessonId: string,
-    language: string,
-    rows: Array<{
-      type: string;
-      title: string;
-      author: string;
-      whyRecommended: string;
-    }>,
+    language: unknown,
+    input: unknown,
   ) {
+    void language;
+    const rows = parseReadingList(input);
     return runCourseWrite(this.prisma, courseId, async (tx) => {
       await this.requireLesson(courseId, lessonId, tx);
-      const data = rows.map((row, index) => {
-        const type = upper(row.type);
-        if (!READING_TYPES.has(type)) {
-          throw new BadRequestException({
-            code: 'READING_TYPE_INVALID',
-            message: 'Type must be Book, Article, Paper or Other.',
-          });
-        }
-        return {
-          type: type as never,
-          title: required(row.title, `Reading ${index + 1} needs a title.`),
-          author: required(row.author, `Reading ${index + 1} needs an author.`),
-          whyRecommended: required(
-            row.whyRecommended,
-            `Reading ${index + 1} needs a recommendation.`,
-          ),
-          sortOrder: index,
-        };
+      const existing = await tx.recommendedReading.findMany({
+        where: { lessonId },
+        select: { id: true },
       });
-      await tx.recommendedReading.deleteMany({ where: { lessonId, language } });
-      for (const row of data) {
-        await tx.recommendedReading.create({
-          data: { lessonId, language, ...row },
+      const existingIds = new Set(existing.map((row) => row.id));
+      const taken = new Set<string>();
+      const found = rows.map((row) => {
+        if (!row.id || !existingIds.has(row.id) || taken.has(row.id)) {
+          return null;
+        }
+        taken.add(row.id);
+        return row.id;
+      });
+      const stale = existing
+        .filter((row) => !taken.has(row.id))
+        .map((row) => row.id);
+      if (stale.length > 0) {
+        await tx.recommendedReading.deleteMany({
+          where: { id: { in: stale } },
         });
       }
-      return { count: data.length };
+
+      const readings: Array<{
+        id: string;
+        type: string;
+        title: string;
+        author: string;
+        whyRecommended: string;
+        sortOrder: number;
+      }> = [];
+      for (const [index, row] of rows.entries()) {
+        const data = {
+          language: READING_LANGUAGE,
+          type: row.type as ReadingType,
+          title: row.title,
+          author: row.author,
+          whyRecommended: row.whyRecommended,
+          sortOrder: index,
+        };
+        const id = found[index];
+        const saved = id
+          ? await tx.recommendedReading.update({ where: { id }, data })
+          : await tx.recommendedReading.create({ data: { lessonId, ...data } });
+        readings.push({
+          id: saved.id,
+          type: row.type,
+          title: row.title,
+          author: row.author,
+          whyRecommended: row.whyRecommended,
+          sortOrder: index,
+        });
+      }
+      return { count: readings.length, readings };
     });
   }
 
@@ -670,82 +713,105 @@ export class CourseAuthoringService {
     }
   }
 
+  /**
+   * 批量导入推荐阅读：表头不对就整个文件 400（不写任何东西）；否则在一个事务里把没有错误的行
+   * 加到各课时英文列表的末尾，有错误的行跳过并逐行说明。返回
+   * `{ rowsRead, added, byLesson: [{ lessonCode, added }], errors: [{ row, message }] }`。
+   */
   async importReadings(
     courseId: string,
     file: { originalname: string; buffer: Buffer } | undefined,
   ) {
-    const rows = this.readSheet(file);
+    const table = this.readTable(file);
+    const missing = missingReadingColumns(table.headers);
+    if (missing.length > 0) {
+      throw new BadRequestException({
+        code: 'READING_COLUMNS_INVALID',
+        message: 'Use the template to import readings.',
+        details: { missing },
+      });
+    }
     return runCourseWrite(this.prisma, courseId, async (tx) => {
       const lessons = await tx.lesson.findMany({
         where: { courseId, archivedAt: null },
+        orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
         select: { id: true, code: true },
       });
+      const check = checkReadingRows(
+        table.rows,
+        lessons.map((lesson) => lesson.code),
+      );
       const lessonByCode = new Map(
         lessons.map((lesson) => [lesson.code, lesson]),
       );
-      const errors: Array<{ row: number; message: string }> = [];
-      let added = 0;
-      for (const [index, row] of rows.entries()) {
-        const lessonCode = this.cell(row, 'Lesson ID', 'LessonID');
-        const lesson = lessonByCode.get(lessonCode);
-        if (!lesson) {
-          errors.push({
-            row: index + 2,
-            message: `Lesson ID ${lessonCode || '(empty)'} doesn't exist`,
-          });
-          continue;
-        }
-        const type = upper(this.cell(row, 'Type'));
-        const title = this.cell(row, 'Title');
-        const author = this.cell(row, 'Author');
-        const why = this.cell(
-          row,
-          'Why we recommend it',
-          'Why we recommend',
-          'Why',
-        );
-        if (!READING_TYPES.has(type)) {
-          errors.push({
-            row: index + 2,
-            message: 'Type must be Book, Article, Paper or Other',
-          });
-          continue;
-        }
-        if (!title) {
-          errors.push({ row: index + 2, message: 'Title is empty' });
-          continue;
-        }
-        if (!author) {
-          errors.push({ row: index + 2, message: 'Author is empty' });
-          continue;
-        }
-        if (!why) {
-          errors.push({
-            row: index + 2,
-            message: 'Why we recommend it is empty',
-          });
-          continue;
-        }
-        const last = await tx.recommendedReading.findFirst({
-          where: { lessonId: lesson.id, language: 'en-GB' },
-          orderBy: { sortOrder: 'desc' },
-          select: { sortOrder: true },
-        });
+      const last = await tx.recommendedReading.groupBy({
+        by: ['lessonId'],
+        where: { lessonId: { in: lessons.map((lesson) => lesson.id) } },
+        _max: { sortOrder: true },
+      });
+      const nextOrder = new Map(
+        last.map((row) => [row.lessonId, (row._max.sortOrder ?? -1) + 1]),
+      );
+      const added = new Map<string, number>();
+      for (const row of check.valid) {
+        const lesson = lessonByCode.get(row.lessonCode);
+        if (!lesson) continue;
+        const sortOrder = nextOrder.get(lesson.id) ?? 0;
+        nextOrder.set(lesson.id, sortOrder + 1);
         await tx.recommendedReading.create({
           data: {
             lessonId: lesson.id,
-            language: 'en-GB',
-            type: type as never,
-            title,
-            author,
-            whyRecommended: why,
-            sortOrder: (last?.sortOrder ?? -1) + 1,
+            language: READING_LANGUAGE,
+            type: row.type as ReadingType,
+            title: row.title,
+            author: row.author,
+            whyRecommended: row.whyRecommended,
+            sortOrder,
           },
         });
-        added++;
+        added.set(row.lessonCode, (added.get(row.lessonCode) ?? 0) + 1);
       }
-      return { added, errors };
+      return {
+        rowsRead: check.rowsRead,
+        added: check.valid.length,
+        byLesson: lessons
+          .filter((lesson) => added.has(lesson.code))
+          .map((lesson) => ({
+            lessonCode: lesson.code,
+            added: added.get(lesson.code) ?? 0,
+          })),
+        errors: check.errors,
+      };
     });
+  }
+
+  /** 推荐阅读导入模板（CSV，BOM 开头）：每个启用课时一行，预填 Course ID、Lesson ID 和英文课时名。 */
+  async downloadReadingTemplate(courseId: string): Promise<string> {
+    const course = await this.prisma.commerceCourse.findUnique({
+      where: { id: courseId },
+      select: { code: true },
+    });
+    if (!course) {
+      throw new NotFoundException({
+        code: 'COURSE_NOT_FOUND',
+        message: 'Course not found',
+      });
+    }
+    const lessons = await this.prisma.lesson.findMany({
+      where: { courseId, archivedAt: null },
+      orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
+      include: { localizations: true },
+    });
+    return readingTemplateCsv(
+      course.code,
+      lessons.map((lesson) => ({
+        code: lesson.code,
+        title:
+          lesson.localizations
+            .find((loc) => loc.language === READING_LANGUAGE)
+            ?.title.trim() ?? '',
+      })),
+    );
   }
 
   async importUnderstanding(
@@ -1046,9 +1112,10 @@ export class CourseAuthoringService {
     }
   }
 
-  private readSheet(
+  /** 读上传的 .xlsx / .csv（CSV 按 UTF-8，开头的 BOM 去掉）；读不出来 400。 */
+  private readTable(
     file: { originalname: string; buffer: Buffer } | undefined,
-  ) {
+  ): SheetTable {
     if (!file?.buffer) {
       throw new BadRequestException({
         code: 'FILE_REQUIRED',
@@ -1056,13 +1123,7 @@ export class CourseAuthoringService {
       });
     }
     try {
-      const workbook = XLSX.read(file.buffer, { type: 'buffer' });
-      const sheet = workbook.Sheets[workbook.SheetNames[0]];
-      if (!sheet) throw new Error('No sheet');
-      return XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, {
-        defval: '',
-        raw: false,
-      });
+      return readSheetTable(file.buffer);
     } catch {
       throw new BadRequestException({
         code: 'SHEET_INVALID',
@@ -1071,27 +1132,18 @@ export class CourseAuthoringService {
     }
   }
 
+  private readSheet(
+    file: { originalname: string; buffer: Buffer } | undefined,
+  ) {
+    return this.readTable(file).rows;
+  }
+
   private normalizeHeader(value: string): string {
-    return value.toLowerCase().replace(/[^a-z0-9]/g, '');
+    return normalizeHeader(value);
   }
 
   private cell(row: Record<string, unknown>, ...names: string[]): string {
-    const entries = Object.entries(row);
-    for (const name of names) {
-      const normalized = this.normalizeHeader(name);
-      const found = entries.find(
-        ([key]) => this.normalizeHeader(key) === normalized,
-      );
-      if (found) {
-        const value = found[1];
-        return typeof value === 'string' ||
-          typeof value === 'number' ||
-          typeof value === 'boolean'
-          ? String(value).trim()
-          : '';
-      }
-    }
-    return '';
+    return sheetCell(row, ...names);
   }
 }
 
