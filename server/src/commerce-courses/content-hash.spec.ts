@@ -178,6 +178,36 @@ describe('contentHash', () => {
     );
   });
 
+  it('sees a change in the order of the exhibits of a lesson', () => {
+    const ordered = (first: string, second: string) => {
+      const base = lesson();
+      return lesson({
+        exhibits: [
+          { ...base.exhibits[0], sortOrder: first === 'E01' ? 1 : 2 },
+          { ...base.exhibits[1], sortOrder: second === 'E02' ? 2 : 1 },
+        ],
+      });
+    };
+    const inCodeOrder = contentHash(snapshot([ordered('E01', 'E02')]), byId);
+    const reordered = contentHash(snapshot([ordered('E02', 'E01')]), byId);
+    expect(reordered).not.toBe(inCodeOrder);
+  });
+
+  it('gives an exhibit list in code order the same fingerprint as before it had an order', () => {
+    // A version published before exhibits had an order has no sortOrder in its snapshot;
+    // the same content, now carrying the order the migration gave it, must not look like a draft.
+    const legacy = lesson();
+    const withOrder = lesson({
+      exhibits: legacy.exhibits.map((exhibit, index) => ({
+        ...exhibit,
+        sortOrder: index + 1,
+      })),
+    });
+    expect(contentHash(snapshot([withOrder]), byId)).toBe(
+      contentHash(snapshot([legacy]), byId),
+    );
+  });
+
   it('changes when any content changes', () => {
     const base = contentHash(snapshot(), byId);
     const moved = lesson();

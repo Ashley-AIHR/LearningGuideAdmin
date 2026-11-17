@@ -9,7 +9,10 @@ import { randomUUID } from 'node:crypto';
 import * as XLSX from 'xlsx';
 import { PrismaService } from '../prisma/prisma.service';
 import {
+  allocate,
+  exhibitCounterKey,
   formatApplicationCode,
+  formatExhibitCode,
   formatKnowledgeCode,
   lessonNumber,
 } from './code-allocator';
@@ -24,6 +27,8 @@ import {
 } from './study-points';
 import { defaultLanguageTest } from './lesson-tests';
 import { convertDocxToHtml } from './docx-to-html';
+import { exhibitInUseMessage, textUsages, videoUsages } from './exhibit-usage';
+import { requireArray } from './input';
 import { mp4DurationSeconds } from './media-duration';
 import {
   MediaValidationError,
@@ -285,10 +290,15 @@ export class CourseAuthoringService {
     });
   }
 
+  /**
+   * 新展品：编号由服务器按课程分配（E001、E002……，全课程唯一，删除后不再发），
+   * 发来的 `code` 不算数；排在本课时展品的最后。
+   */
   async createExhibit(
     courseId: string,
     lessonId: string,
     body: {
+      /** 已忽略：展品编号由服务器分配。 */
       code?: string;
       type: string;
       mediaAssetId?: string | null;
@@ -312,8 +322,7 @@ export class CourseAuthoringService {
       if (body.thumbnailAssetId) {
         await this.requireAsset(courseId, body.thumbnailAssetId, tx);
       }
-      const code =
-        body.code?.trim() || (await this.nextExhibitCode(courseId, tx));
+      const code = await this.allocateExhibitCode(courseId, tx);
       return tx.exhibit.create({
         data: {
           lessonId,
@@ -395,25 +404,80 @@ export class CourseAuthoringService {
           code: 'EXHIBIT_NOT_FOUND',
           message: 'Exhibit not found.',
         });
-      if (lesson.triggers.some((trigger) => trigger.exhibitId === exhibitId)) {
+      // 还被视频触发或正文引用着：不删，并说明在哪一课的哪个位置
+      const active = await tx.lesson.findMany({
+        where: { courseId, archivedAt: null },
+        orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
+        select: { id: true },
+      });
+      const lessonPosition = active.findIndex((row) => row.id === lessonId) + 1;
+      const usages = [
+        ...videoUsages(lessonPosition, lesson.triggers, exhibitId),
+        ...textUsages(lessonPosition, lesson.localizations, exhibit),
+      ];
+      if (usages.length > 0) {
         throw new ConflictException({
           code: 'EXHIBIT_IN_USE',
-          message: 'Used in Video triggers. Remove the trigger first.',
-        });
-      }
-      const referencedInText = lesson.localizations.some(
-        (loc) =>
-          loc.textHtml?.includes(exhibitId) ||
-          loc.textHtml?.includes(`data-exhibit-code="${exhibit.code}"`),
-      );
-      if (referencedInText) {
-        throw new ConflictException({
-          code: 'EXHIBIT_IN_USE',
-          message: 'Used in text content. Remove it there first.',
+          message: exhibitInUseMessage(usages),
+          details: { usages },
         });
       }
       await tx.exhibit.delete({ where: { id: exhibitId } });
       return { deleted: true };
+    });
+  }
+
+  /**
+   * 展品排序：要给出本课时全部展品的新顺序，缺一个或多一个都不写（400）；
+   * 不是本课时的展品 id 整批拒绝（404）。位置重新编成 1..N。
+   */
+  async reorderExhibits(courseId: string, lessonId: string, input: unknown) {
+    const ids = requireArray(input, 'exhibitIds', {
+      code: 'EXHIBIT_ORDER_INVALID',
+    });
+    if (
+      ids.some((id) => typeof id !== 'string') ||
+      new Set(ids).size !== ids.length
+    ) {
+      throw new BadRequestException({
+        code: 'EXHIBIT_ORDER_INVALID',
+        message: 'exhibitIds must be a list of distinct exhibit ids.',
+        details: { field: 'exhibitIds' },
+      });
+    }
+    const order = ids as string[];
+    return runCourseWrite(this.prisma, courseId, async (tx) => {
+      const lesson = await this.requireLesson(courseId, lessonId, tx);
+      const byId = new Map(lesson.exhibits.map((row) => [row.id, row]));
+      if (order.some((id) => !byId.has(id))) {
+        throw new NotFoundException({
+          code: 'EXHIBIT_NOT_FOUND',
+          message: 'Exhibit not found.',
+        });
+      }
+      if (order.length !== byId.size) {
+        throw new BadRequestException({
+          code: 'EXHIBIT_ORDER_INCOMPLETE',
+          message: 'List every exhibit of the lesson exactly once.',
+          details: { expected: byId.size, received: order.length },
+        });
+      }
+      for (const [index, id] of order.entries()) {
+        const row = byId.get(id);
+        if (row && row.sortOrder !== index + 1) {
+          await tx.exhibit.update({
+            where: { id },
+            data: { sortOrder: index + 1 },
+          });
+        }
+      }
+      return {
+        exhibits: order.map((id, index) => ({
+          id,
+          code: byId.get(id)?.code ?? '',
+          sortOrder: index + 1,
+        })),
+      };
     });
   }
 
@@ -946,20 +1010,21 @@ export class CourseAuthoringService {
     return (last?.sortOrder ?? 0) + 1;
   }
 
-  private async nextExhibitCode(
+  /** 下一个展品编号：计数器只增不减；包导入带来的、已被占用的编号跳过。 */
+  private async allocateExhibitCode(
     courseId: string,
-    db: Db = this.prisma,
+    tx: CourseTx,
   ): Promise<string> {
-    const rows = await db.exhibit.findMany({
-      where: { lesson: { courseId } },
-      select: { code: true },
-    });
-    let max = 0;
-    for (const row of rows) {
-      const match = /^E(\d+)$/i.exec(row.code);
-      if (match) max = Math.max(max, Number(match[1]));
+    for (;;) {
+      const code = formatExhibitCode(
+        await allocate(tx, exhibitCounterKey(courseId)),
+      );
+      const taken = await tx.exhibit.findUnique({
+        where: { courseId_code: { courseId, code } },
+        select: { id: true },
+      });
+      if (!taken) return code;
     }
-    return `E${String(max + 1).padStart(3, '0')}`;
   }
 
   private assertExpectedKind(

@@ -129,6 +129,11 @@ describe('route access classification', () => {
         'EDIT_EXISTING',
       ],
       [
+        'PUT',
+        '/api/backoffice/courses/c1/lessons/l1/exhibits/order',
+        'EDIT_EXISTING',
+      ],
+      [
         'DELETE',
         '/api/backoffice/courses/c1/lessons/l1/exhibits/e1',
         'EDIT_EXISTING',

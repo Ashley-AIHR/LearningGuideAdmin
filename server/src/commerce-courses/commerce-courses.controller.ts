@@ -490,6 +490,7 @@ export class CommerceCoursesController {
     @Param('lessonId') lessonId: string,
     @Body()
     body: {
+      /** 已忽略：展品编号由服务器分配（E001、E002……）。 */
       code?: string;
       type: string;
       mediaAssetId?: string | null;
@@ -499,6 +500,22 @@ export class CommerceCoursesController {
     },
   ) {
     return this.authoring.createExhibit(id, lessonId, body);
+  }
+
+  /** 必须写在 `:exhibitId` 之前，否则 `order` 会被当成展品 id。 */
+  @Put(':id/lessons/:lessonId/exhibits/order')
+  @UseInterceptors(DraftRevisionInterceptor)
+  @HttpCode(200)
+  reorderExhibits(
+    @Param('id') id: string,
+    @Param('lessonId') lessonId: string,
+    @Body()
+    body: {
+      /** 本课时全部展品的新顺序。 */
+      exhibitIds?: unknown;
+    },
+  ) {
+    return this.authoring.reorderExhibits(id, lessonId, body.exhibitIds);
   }
 
   @Put(':id/lessons/:lessonId/exhibits/:exhibitId')

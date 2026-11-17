@@ -58,6 +58,8 @@ export interface SnapshotLesson {
   }>;
   exhibits: Array<{
     code: string;
+    /** 课时内的显示顺序；展品有顺序之前拍的旧快照没有这一项，按数组顺序当作顺序。 */
+    sortOrder?: number;
     type: string;
     mediaAssetId: string | null;
     thumbnailAssetId: string | null;
@@ -114,7 +116,7 @@ export async function captureVersionSnapshot(
         orderBy: { sortOrder: 'asc' },
         include: {
           localizations: true,
-          exhibits: true,
+          exhibits: { orderBy: [{ sortOrder: 'asc' }, { code: 'asc' }] },
           learningPoints: { orderBy: { sortOrder: 'asc' } },
           triggers: {
             orderBy: [{ timeSeconds: 'asc' }, { sortOrder: 'asc' }],
@@ -172,6 +174,7 @@ export async function captureVersionSnapshot(
           })),
           exhibits: lesson.exhibits.map((exhibit) => ({
             code: exhibit.code,
+            sortOrder: exhibit.sortOrder,
             type: exhibit.type,
             mediaAssetId: exhibit.mediaAssetId,
             thumbnailAssetId: exhibit.thumbnailAssetId,
@@ -378,7 +381,15 @@ export async function applyVersionSnapshotInTx(
     }
 
     const exhibitIdByCode = new Map<string, string>();
-    for (const [index, exhibit] of lesson.exhibits.entries()) {
+    // 带 sortOrder 的快照按它排；旧快照没有，数组顺序就是顺序。位置重新编成 1..N。
+    const exhibitsInOrder = lesson.exhibits.every(
+      (exhibit) => typeof exhibit.sortOrder === 'number',
+    )
+      ? [...lesson.exhibits].sort(
+          (a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0),
+        )
+      : lesson.exhibits;
+    for (const [index, exhibit] of exhibitsInOrder.entries()) {
       const created = await tx.exhibit.create({
         data: {
           lessonId,

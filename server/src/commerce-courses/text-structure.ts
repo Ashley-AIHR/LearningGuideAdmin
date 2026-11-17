@@ -61,6 +61,43 @@ export function parseTextStructure(
   });
 }
 
+/** 一个 H1 开头标签，或任何带展品 id / 编号的标签（编辑器插入的展品卡片）。 */
+const HEADING_OR_EXHIBIT_REF =
+  /<h1\b[^>]*>|<[a-z][a-z0-9]*\b[^>]*\bdata-exhibit-(?:code|id)\s*=[^>]*>/gi;
+const exhibitAttribute = (name: 'code' | 'id') =>
+  new RegExp(`\\sdata-exhibit-${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`, 'i');
+const EXHIBIT_CODE_ATTRIBUTE = exhibitAttribute('code');
+const EXHIBIT_ID_ATTRIBUTE = exhibitAttribute('id');
+
+/**
+ * 正文里这个展品的每张卡片在第几个 H1 之下（从 1 起；在第一个 H1 之前是 0），按出现顺序，
+ * 同一展品出现几次就有几项。卡片按它的 `data-exhibit-id` 或 `data-exhibit-code` 认。
+ * 删除展品时据此告诉用户"在哪一课的哪个学习点里用着"。
+ */
+export function exhibitCardPositions(
+  html: string | null | undefined,
+  exhibit: { id: string; code: string },
+): number[] {
+  if (!html) return [];
+  const positions: number[] = [];
+  let headings = 0;
+  for (const match of html.matchAll(HEADING_OR_EXHIBIT_REF)) {
+    const tag = match[0];
+    if (/^<h1\b/i.test(tag)) {
+      headings += 1;
+      continue;
+    }
+    const id = EXHIBIT_ID_ATTRIBUTE.exec(tag);
+    const code = EXHIBIT_CODE_ATTRIBUTE.exec(tag);
+    const cardId = (id?.[1] ?? id?.[2] ?? '').trim();
+    const cardCode = (code?.[1] ?? code?.[2] ?? '').trim();
+    if (cardId === exhibit.id || cardCode === exhibit.code) {
+      positions.push(headings);
+    }
+  }
+  return positions;
+}
+
 /**
  * 把这次保存的每个 H1 对到库里已有的 TEXT 学习点行（D2 的认人顺序）：
  * 1) 先按章：H1 带着某一行的 code 就是那一行，改了标题也一样；一行只认一次；

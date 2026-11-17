@@ -69,6 +69,23 @@ function sorted<T>(
   return [...items].sort(compareBy(...keys));
 }
 
+/**
+ * 展品的先后顺序是内容（门户按它展示），所以顺序进指纹：按 sortOrder、再按编号排，
+ * sortOrder 本身不进指纹，顺序只体现在数组位置上。这样展品有顺序之前拍的旧快照
+ * （没有 sortOrder，按编号排）与同样内容、顺序恰好等于编号顺序的现在的草稿指纹相同，
+ * 升级后已发布的课程不会凭空多出一份草稿；真的调换了顺序，指纹才变。
+ */
+function exhibitsInOrder(exhibits: SnapshotLesson['exhibits']) {
+  const ordered = exhibits.every((e) => typeof e.sortOrder === 'number');
+  return ordered
+    ? sorted(
+        exhibits,
+        (e) => e.sortOrder ?? 0,
+        (e) => e.code,
+      )
+    : sorted(exhibits, (e) => e.code);
+}
+
 function lessonView(lesson: SnapshotLesson, asset: AssetKey) {
   return {
     code: lesson.code,
@@ -81,10 +98,13 @@ function lessonView(lesson: SnapshotLesson, asset: AssetKey) {
           loc.textHtml === null ? null : stripLearningPointStamps(loc.textHtml),
       }),
     ),
-    exhibits: sorted(lesson.exhibits, (e) => e.code).map((exhibit) => ({
-      ...exhibit,
+    exhibits: exhibitsInOrder(lesson.exhibits).map((exhibit) => ({
+      code: exhibit.code,
+      type: exhibit.type,
       mediaAssetId: asset(exhibit.mediaAssetId),
       thumbnailAssetId: asset(exhibit.thumbnailAssetId),
+      sourceText: exhibit.sourceText,
+      localized: exhibit.localized,
     })),
     learningPoints: sorted(
       lesson.learningPoints,

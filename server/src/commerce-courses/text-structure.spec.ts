@@ -1,4 +1,5 @@
 import {
+  exhibitCardPositions,
   matchTextPoints,
   parseTextStructure,
   stampLearningPoints,
@@ -116,6 +117,54 @@ describe('stampLearningPoints', () => {
       'T4',
       'T5',
     ]);
+  });
+});
+
+describe('exhibitCardPositions', () => {
+  const card = (code: string, id: string) =>
+    `<figure data-exhibit-code="${code}" data-exhibit-id="${id}" class="course-exhibit-card"><div><strong>Map</strong></div></figure><p><br/></p>`;
+  const exhibit = { id: 'id-1', code: 'E001' };
+
+  it('says under which Heading 1 the card sits, counting from 1', () => {
+    const html = `<h1>A</h1><p>a</p><h1>B</h1><p>b</p><h1 data-lp="T3">C</h1>${card('E001', 'id-1')}<p>c</p>`;
+    expect(exhibitCardPositions(html, exhibit)).toEqual([3]);
+  });
+
+  it('gives 0 for a card before the first Heading 1', () => {
+    expect(
+      exhibitCardPositions(
+        `${card('E001', 'id-1')}<h1>A</h1><p>a</p>`,
+        exhibit,
+      ),
+    ).toEqual([0]);
+  });
+
+  it('lists every card of the exhibit, and none of another exhibit', () => {
+    const html = `<h1>A</h1>${card('E001', 'id-1')}<h1>B</h1>${card('E002', 'id-2')}${card('E001', 'id-1')}`;
+    expect(exhibitCardPositions(html, exhibit)).toEqual([1, 2]);
+    expect(exhibitCardPositions(html, { id: 'id-2', code: 'E002' })).toEqual([
+      2,
+    ]);
+  });
+
+  it('knows a card by its id alone, or by its code alone', () => {
+    expect(
+      exhibitCardPositions(
+        '<h1>A</h1><figure data-exhibit-id="id-1"></figure>',
+        exhibit,
+      ),
+    ).toEqual([1]);
+    expect(
+      exhibitCardPositions(
+        "<h1>A</h1><figure data-exhibit-code='E001'></figure>",
+        exhibit,
+      ),
+    ).toEqual([1]);
+  });
+
+  it('finds nothing in empty text or text without the exhibit', () => {
+    expect(exhibitCardPositions(null, exhibit)).toEqual([]);
+    expect(exhibitCardPositions('<h1>A</h1><p>E001</p>', exhibit)).toEqual([]);
   });
 });
 

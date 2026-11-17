@@ -56,7 +56,10 @@ export async function buildCoursePackage(
         orderBy: { sortOrder: 'asc' },
         include: {
           localizations: { include: { video: true } },
-          exhibits: { include: { media: true, thumbnail: true } },
+          exhibits: {
+            include: { media: true, thumbnail: true },
+            orderBy: [{ sortOrder: 'asc' }, { code: 'asc' }],
+          },
           readings: { orderBy: { sortOrder: 'asc' } },
           questions: { orderBy: { sortOrder: 'asc' } },
           applicationTests: true,
