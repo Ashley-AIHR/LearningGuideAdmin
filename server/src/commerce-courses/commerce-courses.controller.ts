@@ -92,7 +92,7 @@ export class CommerceCoursesController {
   create(
     @Body()
     body: {
-      code: string;
+      code?: string;
       slug?: string;
       title: string;
       language?: string;
@@ -105,6 +105,12 @@ export class CommerceCoursesController {
     @Req() request: BackofficeRequest,
   ) {
     return this.courses.createCourse(body, actor(request));
+  }
+
+  /** 创建对话框显示的下一个 Course ID（只看不占）。需声明在 :id 之前；GET 属 VIEW。 */
+  @Get('next-code')
+  nextCode() {
+    return this.courses.nextCode();
   }
 
   @Get('categories')

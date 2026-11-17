@@ -32,6 +32,11 @@ export class CourseFixtures {
     return signInAs(this.app, 'ADMIN');
   }
 
+  /** Sign in as another role, for the permission checks. */
+  async agentFor(role: string): Promise<TestAgent> {
+    return signInAs(this.app, role);
+  }
+
   /** Create a course through `POST /api/backoffice/courses`. Extra body keys are sent as is. */
   async createCourse(
     agent: TestAgent,

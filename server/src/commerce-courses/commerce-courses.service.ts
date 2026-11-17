@@ -14,6 +14,8 @@ import { HISTORY_ACTIONS, PublishingService } from './publishing.service';
 import { syncTextLearningPoints } from './course-authoring.service';
 import { draftContentHash, versionContentHash } from './content-hash';
 import { categoryRef } from './localized-fields';
+import { allocateCourseCode, peekCourseCode } from './code-allocator';
+import { optionalString } from './input';
 import { withDefaultLanguageTests } from './lesson-tests';
 
 const CLEARED_DRAFT = {
@@ -291,18 +293,36 @@ export class CommerceCoursesService {
     ) as 'VIDEO_ONLY' | 'TEXT_ONLY' | 'VIDEO_AND_TEXT';
   }
 
+  /** 标题的拉丁字母部分；没有拉丁字母时为空，由调用方改用 Course ID。 */
   private slugify(input: string): string {
-    const base = input
+    return input
       .toLowerCase()
       .trim()
       .replace(/[^a-z0-9]+/g, '-')
       .replace(/^-+|-+$/g, '');
-    return base || 'course';
+  }
+
+  /** 在事务里挑一个没被占用的 slug：标题的 slug，没有拉丁字母就用 Course ID，重名加 -2、-3。 */
+  private async freeSlug(
+    tx: Prisma.TransactionClient,
+    wanted: string,
+    code: string,
+  ): Promise<string> {
+    const base = wanted || code.toLowerCase();
+    for (let n = 1; ; n += 1) {
+      const slug = n === 1 ? base : `${base}-${n}`;
+      const taken = await tx.commerceCourse.findUnique({
+        where: { slug },
+        select: { id: true },
+      });
+      if (!taken) return slug;
+    }
   }
 
   async createCourse(
     body: {
-      code: string;
+      /** 已忽略：Course ID 由服务器分配（PRD L255），响应里是真实的编号。 */
+      code?: string;
       slug?: string;
       title: string;
       language?: string;
@@ -314,57 +334,70 @@ export class CommerceCoursesService {
     },
     actorEmployeeId: string | null,
   ) {
+    const title = optionalString(body.title, 'title') ?? '';
     const language = body.defaultContentLanguage || body.language || 'en-GB';
     const learningLanguages =
       body.learningLanguages && body.learningLanguages.length > 0
         ? body.learningLanguages
         : [language];
-    const code = (body.code?.trim() || this.slugify(body.title)).toUpperCase();
-    const slug = body.slug?.trim() || this.slugify(body.title);
-    try {
-      const course = await this.prisma.commerceCourse.create({
-        data: {
-          code,
-          slug,
-          learningMode: this.normaliseMode(body.learningMode),
-          defaultContentLanguage: language,
-          learningLanguages: learningLanguages,
-          categoryId: body.categoryId || null,
-          subtitle: body.subtitle ?? null,
-          hasDraft: true,
-          lifecycleStatus: 'WORKING',
-          localizations: {
-            create: {
-              language,
-              title: body.title,
-              shortDescription: body.subtitle ?? null,
+    // 两个同时创建、标题又相同的请求可能挑中同一个 slug：唯一键拒绝后整个事务（含编号）回滚，重试一次。
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        const course = await this.prisma.$transaction(async (tx) => {
+          const code = await allocateCourseCode(tx);
+          const slug = await this.freeSlug(tx, this.slugify(title), code);
+          const created = await tx.commerceCourse.create({
+            data: {
+              code,
+              slug,
+              learningMode: this.normaliseMode(body.learningMode),
+              defaultContentLanguage: language,
+              learningLanguages: learningLanguages,
+              categoryId: body.categoryId || null,
+              subtitle: body.subtitle ?? null,
+              hasDraft: true,
+              lifecycleStatus: 'WORKING',
+              localizations: {
+                create: {
+                  language,
+                  title,
+                  shortDescription: body.subtitle ?? null,
+                },
+              },
+              authors: actorEmployeeId
+                ? { create: { employeeId: actorEmployeeId } }
+                : undefined,
             },
-          },
-          authors: actorEmployeeId
-            ? { create: { employeeId: actorEmployeeId } }
-            : undefined,
-        },
-        select: { id: true },
-      });
-      await this.publishing.recordHistory(
-        course.id,
-        HISTORY_ACTIONS.CREATE_COURSE,
-        { code },
-        actorEmployeeId,
-      );
-      return this.detail(course.id);
-    } catch (error) {
-      if (
-        error instanceof Prisma.PrismaClientKnownRequestError &&
-        error.code === 'P2002'
-      ) {
-        throw new ConflictException({
-          code: 'COURSE_CODE_DUPLICATE',
-          message: 'A course with this code or slug already exists.',
+            select: { id: true },
+          });
+          return { id: created.id, code };
         });
+        await this.publishing.recordHistory(
+          course.id,
+          HISTORY_ACTIONS.CREATE_COURSE,
+          { code: course.code },
+          actorEmployeeId,
+        );
+        return this.detail(course.id);
+      } catch (error) {
+        if (
+          error instanceof Prisma.PrismaClientKnownRequestError &&
+          error.code === 'P2002'
+        ) {
+          if (attempt < 5) continue;
+          throw new ConflictException({
+            code: 'COURSE_CODE_DUPLICATE',
+            message: 'A course with this code or slug already exists.',
+          });
+        }
+        throw error;
       }
-      throw error;
     }
+  }
+
+  /** 创建对话框显示的下一个 Course ID（只看不占；真正的编号在创建时取）。 */
+  async nextCode(): Promise<{ code: string }> {
+    return { code: await peekCourseCode(this.prisma) };
   }
 
   async updateCourse(

@@ -23,6 +23,9 @@ describe('Commerce course workflow (e2e)', () => {
   let app: INestApplication<App>;
   let prisma: PrismaService;
   const code = `E2E-WF-${Date.now()}`;
+  // Course codes are handed out by the server now, so each course made here is
+  // remembered by the id the create call returned (and removed again afterwards).
+  const ownIds: Partial<Record<'P' | 'H' | 'R' | 'L' | 'O', string>> = {};
 
   beforeAll(async () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
@@ -37,16 +40,7 @@ describe('Commerce course workflow (e2e)', () => {
   afterAll(async () => {
     const courses = await prisma.commerceCourse.findMany({
       where: {
-        code: {
-          in: [
-            code,
-            `${code}-L`,
-            `${code}-O`,
-            `${code}-P`,
-            `${code}-H`,
-            `${code}-R`,
-          ],
-        },
+        id: { in: Object.values(ownIds).filter((id) => id !== undefined) },
       },
     });
     for (const course of courses) {
@@ -78,8 +72,9 @@ describe('Commerce course workflow (e2e)', () => {
     const agent = await signInAs(app, 'ADMIN');
     const created: SuccessResponse<{ id: string }> = await agent
       .post('/api/backoffice/courses')
-      .send({ code: `${code}-P`, title: 'Publish e2e' });
+      .send({ title: 'Publish e2e' });
     const id: string = created.body.data.id;
+    ownIds.P = id;
     await agent
       .post(`/api/backoffice/courses/${id}/lessons`)
       .send({ title: 'One' })
@@ -145,8 +140,9 @@ describe('Commerce course workflow (e2e)', () => {
     const agent = await signInAs(app, 'ADMIN');
     const created: SuccessResponse<{ id: string }> = await agent
       .post('/api/backoffice/courses')
-      .send({ code: `${code}-H`, title: `${code} fingerprint` });
+      .send({ title: `${code} fingerprint` });
     const id: string = created.body.data.id;
+    ownIds.H = id;
     const lesson: SuccessResponse<{ lessons: { id: string }[] }> = await agent
       .post(`/api/backoffice/courses/${id}/lessons`)
       .send({ title: 'One' })
@@ -204,8 +200,8 @@ describe('Commerce course workflow (e2e)', () => {
   });
 
   it('keeps course events append-only, each with its transaction id', async () => {
-    const course = await prisma.commerceCourse.findFirstOrThrow({
-      where: { code: `${code}-H` },
+    const course = await prisma.commerceCourse.findUniqueOrThrow({
+      where: { id: ownIds.H },
     });
     const event = await prisma.courseAuthoringActivity.findFirstOrThrow({
       where: { courseId: course.id, action: 'PUBLISH' },
@@ -237,9 +233,10 @@ describe('Commerce course workflow (e2e)', () => {
 
     const created: SuccessResponse<{ id: string }> = await alice
       .post('/api/backoffice/courses')
-      .send({ code: `${code}-R`, title: `${code} revision` });
+      .send({ title: `${code} revision` });
     expect(created.body).toMatchObject({ error: null });
     const id: string = created.body.data.id;
+    ownIds.R = id;
     const lesson: SuccessResponse<{ lessons: { id: string }[] }> = await alice
       .post(`/api/backoffice/courses/${id}/lessons`)
       .send({ title: 'One' })
@@ -300,10 +297,7 @@ describe('Commerce course workflow (e2e)', () => {
 
   it('deletes a draft once when Delete draft is pressed twice at the same time', async () => {
     const agent = await signInAs(app, 'ADMIN');
-    const course = await prisma.commerceCourse.findFirstOrThrow({
-      where: { code: `${code}-P` },
-    });
-    const id = course.id;
+    const id = ownIds.P!;
     await agent
       .post(`/api/backoffice/courses/${id}/lessons`)
       .send({ title: 'Draft only' })
@@ -337,8 +331,9 @@ describe('Commerce course workflow (e2e)', () => {
     const agent = await signInAs(app, 'ADMIN');
     const created: SuccessResponse<{ id: string }> = await agent
       .post('/api/backoffice/courses')
-      .send({ code: `${code}-L`, title: 'Lessons e2e' });
+      .send({ title: 'Lessons e2e' });
     const id: string = created.body.data.id;
+    ownIds.L = id;
 
     // 同时新建两节课：序号和默认 code 各不相同
     const made = await Promise.all([
@@ -384,11 +379,12 @@ describe('Commerce course workflow (e2e)', () => {
     const agent = await signInAs(app, 'ADMIN');
     const mine: SuccessResponse<{ id: string }> = await agent
       .post('/api/backoffice/courses')
-      .send({ code: `${code}-O`, title: 'Order e2e' });
-    const other = await prisma.commerceCourse.findFirst({
-      where: { code: `${code}-L` },
+      .send({ title: 'Order e2e' });
+    const other = await prisma.commerceCourse.findUniqueOrThrow({
+      where: { id: ownIds.L },
     });
     const myId: string = mine.body.data.id;
+    ownIds.O = myId;
     await agent
       .post(`/api/backoffice/courses/${myId}/lessons`)
       .send({ title: 'Mine' });
@@ -396,7 +392,7 @@ describe('Commerce course workflow (e2e)', () => {
       where: { courseId: myId },
     });
     const otherLesson = await prisma.lesson.findFirstOrThrow({
-      where: { courseId: other!.id },
+      where: { courseId: other.id },
     });
 
     const res = await agent

@@ -109,6 +109,7 @@ describe('route access classification', () => {
     const cases: [string, string, string][] = [
       ['GET', '/api/backoffice/courses', 'VIEW'],
       ['GET', '/api/backoffice/courses/c1/history', 'VIEW'],
+      ['GET', '/api/backoffice/courses/next-code', 'VIEW'],
       ['POST', '/api/backoffice/courses', 'CREATE'],
       ['PUT', '/api/backoffice/courses/c1', 'EDIT_EXISTING'],
       [
