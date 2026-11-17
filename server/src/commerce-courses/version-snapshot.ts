@@ -1,3 +1,4 @@
+import { NotFoundException } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import {
@@ -123,7 +124,11 @@ export async function captureVersionSnapshot(
       },
     },
   });
-  if (!course) throw new Error(`Course ${courseId} not found`);
+  if (!course)
+    throw new NotFoundException({
+      code: 'COURSE_NOT_FOUND',
+      message: 'Course not found',
+    });
   // 测试按语言存；快照在 B14 之前只带默认内容语言的那一份。
   const testLanguage = course.defaultContentLanguage;
 
@@ -491,18 +496,47 @@ export async function applyVersionSnapshotInTx(
   }
 }
 
-/** 快照 → 完成度输入（工作区 detail 与快照共用同一套规则）。 */
+interface CompletenessTrial {
+  trialEnabled: boolean;
+  trialRows: Array<{
+    lessonId: string;
+    status?: string | null;
+    videoCutoffSeconds?: number | null;
+    textCutoffLearningPointId?: string | null;
+  }>;
+}
+
+/** TrialService.get 的结果 → 完成度要看的试看设置（试看不在快照里，随课程当前设置读取）。 */
+export function completenessTrial(trial: {
+  enabled: boolean;
+  rows: Array<{
+    inTrial: boolean;
+    lessonId: string;
+    status?: string | null;
+    videoCutoffSeconds?: number | null;
+    textCutoffLearningPointId?: string | null;
+  }>;
+}): CompletenessTrial {
+  return {
+    trialEnabled: trial.enabled,
+    trialRows: trial.rows
+      .filter((row) => row.inTrial)
+      .map((row) => ({
+        lessonId: row.lessonId,
+        status: row.status,
+        videoCutoffSeconds: row.videoCutoffSeconds,
+        textCutoffLearningPointId: row.textCutoffLearningPointId,
+      })),
+  };
+}
+
+/**
+ * 快照 → 完成度输入。草稿、线上版本、导出检查和预览都先拍快照再走这里，
+ * 所以同一份内容在哪里算出的 issues 都一样。
+ */
 export function snapshotToCompletenessInput(
   snapshot: VersionSnapshot,
-  trial: {
-    trialEnabled: boolean;
-    trialRows: Array<{
-      lessonId: string;
-      status?: string | null;
-      videoCutoffSeconds?: number | null;
-      textCutoffLearningPointId?: string | null;
-    }>;
-  },
+  trial: CompletenessTrial,
 ): CompletenessInput {
   const localizations: ContentLocalization[] = snapshot.course.localizations;
   const lessons: ContentLesson[] = snapshot.course.lessons.map((lesson) => ({
@@ -520,12 +554,21 @@ export function snapshotToCompletenessInput(
     learningPoints: lesson.learningPoints.map((lp) => ({
       language: lp.language,
       source: lp.source,
+      code: lp.code,
+      title: lp.title,
+      timeSeconds: lp.timeSeconds,
+    })),
+    triggers: (lesson.triggers ?? []).map((trigger) => ({
+      language: trigger.language,
+      exhibitCode: trigger.exhibitCode,
+      timeSeconds: trigger.timeSeconds,
     })),
     questions: lesson.questions,
     applicationTest: lesson.applicationTest,
   }));
   return {
     categoryId: snapshot.course.categoryId,
+    coverAssetId: snapshot.course.coverAssetId,
     learningMode: snapshot.course.learningMode,
     learningLanguages: snapshot.course.learningLanguages,
     localizations,
@@ -533,59 +576,4 @@ export function snapshotToCompletenessInput(
     trialEnabled: trial.trialEnabled,
     trialRows: trial.trialRows,
   };
-}
-
-/** 工作区 detail → 完成度输入。 */
-export function detailToCompletenessInput(detail: {
-  categoryId?: string | null;
-  learningMode: string;
-  learningLanguages: unknown;
-  trialEnabled?: boolean;
-  localizations: Array<CourseLocalizationLike>;
-  lessons: Array<{
-    id: string;
-    code: string;
-    sortOrder: number;
-    archivedAt?: Date | null;
-    localizations: Array<
-      CourseLocalizationLike & {
-        videoAssetId?: string | null;
-        video?: { id: string } | null;
-        videoDurationSeconds?: number | null;
-        textHtml?: string | null;
-      }
-    >;
-    learningPoints?: Array<{ language: string; source: string }>;
-    questions?: Array<{ question: string; referenceAnswer: string | null }>;
-    applicationTest?: {
-      scenario: string;
-      referenceAnswer: string | null;
-      enabled: boolean;
-    } | null;
-  }>;
-  trialRows: Array<{
-    lessonId: string;
-    status?: string | null;
-    videoCutoffSeconds?: number | null;
-    textCutoffLearningPointId?: string | null;
-  }>;
-}): CompletenessInput {
-  return {
-    categoryId: detail.categoryId ?? null,
-    learningMode: detail.learningMode,
-    learningLanguages: (detail.learningLanguages as string[]) ?? [],
-    localizations: detail.localizations,
-    lessons: detail.lessons,
-    trialEnabled: Boolean(detail.trialEnabled),
-    trialRows: detail.trialRows,
-  };
-}
-
-interface CourseLocalizationLike {
-  language: string;
-  title?: string | null;
-  shortDescription?: string | null;
-  overview?: string | null;
-  whatYouLearn?: unknown;
-  provides?: unknown;
 }

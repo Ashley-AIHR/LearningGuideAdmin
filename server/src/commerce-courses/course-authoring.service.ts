@@ -25,6 +25,7 @@ import {
   type ValidatedMedia,
 } from './media-validate';
 import { CourseStorageService } from './storage.service';
+import { parseTextStructure } from './text-structure';
 import { categoryRef, EXHIBIT_FIELDS } from './localized-fields';
 import { parseLocalized } from '../common/i18n/localized';
 
@@ -41,43 +42,6 @@ function upper(value: unknown): string {
   return typeof value === 'string' ? value.trim().toUpperCase() : '';
 }
 
-function stripHtml(value: string): string {
-  return value
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/&nbsp;/gi, ' ')
-    .replace(/&amp;/gi, '&')
-    .replace(/&lt;/gi, '<')
-    .replace(/&gt;/gi, '>')
-    .replace(/&quot;/gi, '"')
-    .replace(/&#39;/gi, "'")
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-export interface ParsedTextLearningPoint {
-  heading: string;
-  hasBody: boolean;
-}
-
-/** 从富文本中识别 Heading 1；仅 H1 是 LP（PRD 12.5.2）。 */
-export function parseTextLearningPoints(
-  html: string,
-): ParsedTextLearningPoint[] {
-  const matches = [...html.matchAll(/<h1\b[^>]*>([\s\S]*?)<\/h1>/gi)];
-  return matches
-    .map((match, index) => {
-      const heading = stripHtml(match[1] ?? '');
-      const start = (match.index ?? 0) + match[0].length;
-      const end =
-        index + 1 < matches.length
-          ? (matches[index + 1].index ?? html.length)
-          : html.length;
-      const body = stripHtml(html.slice(start, end));
-      return { heading, hasBody: Boolean(body) };
-    })
-    .filter((row) => Boolean(row.heading));
-}
-
 /**
  * 把文本中的 H1 同步为 TEXT Learning Point。
  * 标题不变的 LP 复用原 code，避免简单编辑导致学习进度 ID 漂移。
@@ -88,7 +52,10 @@ export async function syncTextLearningPoints(
   language: string,
   html: string | null,
 ): Promise<void> {
-  const points = html ? parseTextLearningPoints(html) : [];
+  // 空标题的 H1 不成为 LP（完成度会提示 "Title can't be empty"）。
+  const points = parseTextStructure(html)
+    .filter((row) => row.title)
+    .map((row) => ({ heading: row.title, hasBody: row.hasBody }));
   const existing = await client.learningPoint.findMany({
     where: { lessonId, language },
     orderBy: { sortOrder: 'asc' },

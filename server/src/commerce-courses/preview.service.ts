@@ -2,12 +2,12 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { computeCompleteness } from './completeness';
 import {
-  detailToCompletenessInput,
+  captureVersionSnapshot,
+  completenessTrial,
   snapshotToCompletenessInput,
   type VersionSnapshot,
 } from './version-snapshot';
 import { TrialService } from './trial.service';
-import { withDefaultLanguageTests } from './lesson-tests';
 import { categoryRef, EXHIBIT_FIELDS } from './localized-fields';
 import { parseLocalized, pickLocalized } from '../common/i18n/localized';
 
@@ -59,117 +59,15 @@ export class PreviewService {
       content = snapshot.course;
       versionLabel = version.versionLabel;
       completeness = computeCompleteness(
-        snapshotToCompletenessInput(snapshot, {
-          trialEnabled: trial.enabled,
-          trialRows: trial.rows.filter((row) => row.inTrial),
-        }),
+        snapshotToCompletenessInput(snapshot, completenessTrial(trial)),
       );
     } else {
-      const found = await this.prisma.commerceCourse.findUnique({
-        where: { id: courseId },
-        include: {
-          localizations: true,
-          trialRows: true,
-          lessons: {
-            where: { archivedAt: null },
-            orderBy: { sortOrder: 'asc' },
-            include: {
-              localizations: { include: { video: true } },
-              exhibits: { include: { media: true, thumbnail: true } },
-              readings: { orderBy: { sortOrder: 'asc' } },
-              questions: { orderBy: { sortOrder: 'asc' } },
-              applicationTests: true,
-              learningPoints: { orderBy: { sortOrder: 'asc' } },
-              triggers: true,
-            },
-          },
-        },
-      });
-      if (!found)
-        throw new NotFoundException({
-          code: 'COURSE_NOT_FOUND',
-          message: 'Course not found',
-        });
-      const detail = withDefaultLanguageTests(found);
-      completeness = computeCompleteness(detailToCompletenessInput(detail));
-      content = {
-        code: detail.code,
-        slug: detail.slug,
-        categoryId: detail.categoryId,
-        coverAssetId: detail.coverAssetId,
-        learningMode: detail.learningMode,
-        defaultContentLanguage: detail.defaultContentLanguage,
-        learningLanguages: (detail.learningLanguages as string[]) ?? [],
-        localizations: detail.localizations.map((loc) => ({
-          language: loc.language,
-          title: loc.title,
-          shortDescription: loc.shortDescription,
-          overview: loc.overview,
-          whatYouLearn: loc.whatYouLearn,
-          provides: loc.provides,
-        })),
-        lessons: detail.lessons.map((lesson) => ({
-          id: lesson.id,
-          code: lesson.code,
-          sortOrder: lesson.sortOrder,
-          localizations: lesson.localizations.map((loc) => ({
-            language: loc.language,
-            title: loc.title,
-            description: loc.description,
-            videoAssetId: loc.videoAssetId,
-            videoDurationSeconds: loc.videoDurationSeconds,
-            textHtml: loc.textHtml,
-            textLearningPoints: loc.textLearningPoints,
-          })),
-          exhibits: lesson.exhibits.map((exhibit) => ({
-            code: exhibit.code,
-            type: exhibit.type,
-            mediaAssetId: exhibit.mediaAssetId,
-            thumbnailAssetId: exhibit.thumbnailAssetId,
-            sourceText: exhibit.sourceText,
-            localized: exhibit.localized,
-          })),
-          learningPoints: lesson.learningPoints.map((lp) => ({
-            language: lp.language,
-            code: lp.code,
-            title: lp.title,
-            source: lp.source,
-            timeSeconds: lp.timeSeconds,
-            anchorHeading: lp.anchorHeading,
-            sortOrder: lp.sortOrder,
-          })),
-          triggers: lesson.triggers.map((trigger) => ({
-            exhibitCode:
-              lesson.exhibits.find(
-                (exhibit) => exhibit.id === trigger.exhibitId,
-              )?.code ?? null,
-            language: trigger.language,
-            timeSeconds: trigger.timeSeconds,
-          })),
-          readings: lesson.readings.map((reading) => ({
-            language: reading.language,
-            type: reading.type,
-            title: reading.title,
-            author: reading.author,
-            whyRecommended: reading.whyRecommended,
-            sortOrder: reading.sortOrder,
-          })),
-          questions: lesson.questions.map((question) => ({
-            code: question.code,
-            question: question.question,
-            referenceAnswer: question.referenceAnswer,
-            sortOrder: question.sortOrder,
-            enabled: question.enabled,
-          })),
-          applicationTest: lesson.applicationTest
-            ? {
-                scenario: lesson.applicationTest.scenario,
-                referenceAnswer: lesson.applicationTest.referenceAnswer,
-                enabled: lesson.applicationTest.enabled,
-              }
-            : null,
-        })),
-      };
+      // 草稿预览和线上版本一样：先拍快照，内容和完成度都从快照来。
+      const snapshot = await captureVersionSnapshot(this.prisma, courseId);
+      content = snapshot.course;
+      completeness = computeCompleteness(
+        snapshotToCompletenessInput(snapshot, completenessTrial(trial)),
+      );
     }
 
     const completenessByLesson = new Map(

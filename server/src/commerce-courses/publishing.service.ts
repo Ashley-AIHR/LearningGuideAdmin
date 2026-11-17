@@ -19,14 +19,13 @@ import {
 import {
   applyVersionSnapshotInTx,
   captureVersionSnapshot,
-  detailToCompletenessInput,
+  completenessTrial,
   snapshotToCompletenessInput,
   type VersionSnapshot,
 } from './version-snapshot';
 import { TrialService } from './trial.service';
 import { snapshotContentHash, versionContentHash } from './content-hash';
 import { employeeNames, operatorName } from './employee-names';
-import { withDefaultLanguageTests } from './lesson-tests';
 
 export interface VersionLabelResult {
   label: string;
@@ -79,57 +78,18 @@ export class PublishingService {
     @Inject(COMMERCE_CONFIG) private readonly config: CommerceCourseConfig,
   ) {}
 
-  /** 读取工作区（草稿）并计算完成度。 */
+  /**
+   * 读取工作区（草稿）并计算完成度：先拍一份快照（只读），再走和线上版本相同的规则，
+   * 所以课程详情、Publish 门禁和导出检查对同一份内容给出同样的 issues。
+   */
   async completenessForDraft(courseId: string): Promise<CourseCompleteness> {
-    const [detail, trial] = await Promise.all([
-      this.draftDetail(courseId),
+    const [snapshot, trial] = await Promise.all([
+      captureVersionSnapshot(this.prisma, courseId),
       this.trial.get(courseId),
     ]);
     return computeCompleteness(
-      detailToCompletenessInput({
-        ...detail,
-        trialRows: trial.rows
-          .filter((row) => row.inTrial)
-          .map((row) => ({
-            lessonId: row.lessonId,
-            status: row.status,
-            videoCutoffSeconds: row.videoCutoffSeconds,
-            textCutoffLearningPointId: row.textCutoffLearningPointId,
-          })),
-      }),
+      snapshotToCompletenessInput(snapshot, completenessTrial(trial)),
     );
-  }
-
-  async draftDetail(courseId: string) {
-    const course = await this.prisma.commerceCourse.findUnique({
-      where: { id: courseId },
-      include: {
-        category: true,
-        cover: true,
-        localizations: true,
-        trialRows: true,
-        lessons: {
-          where: { archivedAt: null },
-          orderBy: { sortOrder: 'asc' },
-          include: {
-            localizations: { include: { video: true } },
-            exhibits: { include: { media: true, thumbnail: true } },
-            readings: { orderBy: { sortOrder: 'asc' } },
-            questions: { orderBy: { sortOrder: 'asc' } },
-            applicationTests: true,
-            learningPoints: { orderBy: { sortOrder: 'asc' } },
-            triggers: true,
-          },
-        },
-      },
-    });
-    if (!course)
-      throw new NotFoundException({
-        code: 'COURSE_NOT_FOUND',
-        message: 'Course not found',
-      });
-    // 测试按语言存；在 B14 之前完整性只认默认内容语言的那一份。
-    return withDefaultLanguageTests(course);
   }
 
   /** 发布草稿：生成不可变版本，立即成为本环境线上版本。 */
@@ -539,15 +499,6 @@ export class PublishingService {
         id: true,
         code: true,
         liveVersionId: true,
-        trialEnabled: true,
-        trialRows: {
-          select: {
-            lessonId: true,
-            status: true,
-            videoCutoffSeconds: true,
-            textCutoffLearningPointId: true,
-          },
-        },
       },
     });
     if (!course)
@@ -574,17 +525,7 @@ export class PublishingService {
     const completeness = computeCompleteness(
       snapshotToCompletenessInput(
         live.snapshotData as unknown as VersionSnapshot,
-        {
-          trialEnabled: course.trialEnabled,
-          trialRows: trial.rows
-            .filter((row) => row.inTrial)
-            .map((row) => ({
-              lessonId: row.lessonId,
-              status: row.status,
-              videoCutoffSeconds: row.videoCutoffSeconds,
-              textCutoffLearningPointId: row.textCutoffLearningPointId,
-            })),
-        },
+        completenessTrial(trial),
       ),
     );
     if (!canExport(completeness)) {

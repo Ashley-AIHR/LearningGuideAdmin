@@ -60,21 +60,26 @@ export class CourseFixtures {
     this.created.push(courseId);
   }
 
-  /** Create a lesson through the API; returns its id and the code the server gave it. */
+  /**
+   * Create a lesson through the API; returns its id and the code the server gave it.
+   * The endpoint answers with the whole course, so the new lesson is the last one.
+   */
   async createLesson(
     agent: TestAgent,
     courseId: string,
     body: Record<string, unknown> = { title: 'Lesson' },
   ): Promise<{ id: string; code: string; sortOrder: number }> {
     const response: SuccessResponse<{
-      id: string;
-      code: string;
-      sortOrder: number;
+      lessons: Array<{ id: string; code: string; sortOrder: number }>;
     }> = await agent
       .post(`/api/backoffice/courses/${courseId}/lessons`)
       .send(body)
       .expect(201);
-    return response.body.data;
+    const lessons = [...response.body.data.lessons].sort(
+      (a, b) => a.sortOrder - b.sortOrder,
+    );
+    const { id, code, sortOrder } = lessons[lessons.length - 1];
+    return { id, code, sortOrder };
   }
 
   /** Seed a video learning point (V code, time in seconds) directly in the database. */

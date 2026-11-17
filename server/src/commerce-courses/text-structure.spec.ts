@@ -1,0 +1,109 @@
+import { parseTextStructure, stampLearningPoints } from './text-structure';
+
+describe('parseTextStructure', () => {
+  it('reads the learning point code the server stamped on a heading', () => {
+    const points = parseTextStructure(
+      '<h1 data-lp="T3">Why it matters</h1><p>Because.</p>',
+    );
+    expect(points).toEqual([
+      { code: 'T3', title: 'Why it matters', hasBody: true, index: 0 },
+    ]);
+  });
+
+  it('also reads a stamp written with single quotes and other attributes around it', () => {
+    const points = parseTextStructure(
+      "<h1 class='x' data-lp='T9' id='a'>Title</h1><p>Body</p>",
+    );
+    expect(points[0].code).toBe('T9');
+    expect(points[0].title).toBe('Title');
+  });
+
+  it('gives a heading with no stamp a null code', () => {
+    expect(parseTextStructure('<h1>New</h1><p>Body</p>')[0].code).toBeNull();
+  });
+
+  it('keeps an empty heading so the caller can flag it, and still counts its position', () => {
+    const points = parseTextStructure(
+      '<h1>First</h1><p>a</p><h1>  </h1><p>b</p><h1><br></h1><h1>Last</h1><p>c</p>',
+    );
+    expect(points.map((p) => p.title)).toEqual(['First', '', '', 'Last']);
+    expect(points.map((p) => p.index)).toEqual([0, 1, 2, 3]);
+  });
+
+  it('says there is no body when the next heading follows at once', () => {
+    const points = parseTextStructure('<h1>A</h1><h1>B</h1><p>Text</p>');
+    expect(points.map((p) => p.hasBody)).toEqual([false, true]);
+  });
+
+  it('does not count an exhibit card as text under the heading', () => {
+    const card =
+      '<figure data-exhibit-code="E001" class="course-exhibit-card"><div><strong>Map</strong><div>IMAGE · E001</div><div>A long description</div></div></figure><p><br/></p>';
+    const onlyCard = parseTextStructure(`<h1>A</h1>${card}<h1>B</h1><p>t</p>`);
+    expect(onlyCard.map((p) => p.hasBody)).toEqual([false, true]);
+
+    const cardAndText = parseTextStructure(`<h1>A</h1>${card}<p>Words</p>`);
+    expect(cardAndText[0].hasBody).toBe(true);
+  });
+
+  it('treats sub-headings as body text and ignores an h2 as a learning point', () => {
+    const points = parseTextStructure('<h1>A</h1><h2>Part one</h2>');
+    expect(points).toHaveLength(1);
+    expect(points[0].hasBody).toBe(true);
+  });
+
+  it('returns nothing for empty or heading-less text', () => {
+    expect(parseTextStructure('')).toEqual([]);
+    expect(parseTextStructure('<p>Just a paragraph</p>')).toEqual([]);
+  });
+
+  it('decodes the usual entities in a title', () => {
+    expect(
+      parseTextStructure('<h1>Tom &amp; Jerry&nbsp;</h1><p>x</p>')[0].title,
+    ).toBe('Tom & Jerry');
+  });
+});
+
+describe('stampLearningPoints', () => {
+  it('writes the code on every heading, in order, and leaves the rest alone', () => {
+    const html =
+      '<h1>One</h1><p>a</p><h2>Sub</h2><h1 class="k">Two</h1><p>b</p>';
+    expect(stampLearningPoints(html, ['T1', 'T2'])).toBe(
+      '<h1 data-lp="T1">One</h1><p>a</p><h2>Sub</h2><h1 class="k" data-lp="T2">Two</h1><p>b</p>',
+    );
+  });
+
+  it('replaces a stamp that is already there instead of doubling it', () => {
+    expect(stampLearningPoints('<h1 data-lp="T9">One</h1>', ['T1'])).toBe(
+      '<h1 data-lp="T1">One</h1>',
+    );
+  });
+
+  it('removes the stamp from a heading that has no code to give', () => {
+    expect(
+      stampLearningPoints('<h1 data-lp="T1">A</h1><h1 data-lp="T2">B</h1>', [
+        'T1',
+      ]),
+    ).toBe('<h1 data-lp="T1">A</h1><h1>B</h1>');
+  });
+
+  it('is the identity on text with no heading', () => {
+    const html = '<p>No headings</p>';
+    expect(stampLearningPoints(html, [])).toBe(html);
+  });
+
+  it('is stable: stamping twice with the same codes changes nothing', () => {
+    const once = stampLearningPoints('<h1>A</h1><h1>B</h1>', ['T1', 'T2']);
+    expect(stampLearningPoints(once, ['T1', 'T2'])).toBe(once);
+  });
+
+  it('parses back what it stamped', () => {
+    const stamped = stampLearningPoints(
+      '<h1>A</h1><p>x</p><h1>B</h1><p>y</p>',
+      ['T4', 'T5'],
+    );
+    expect(parseTextStructure(stamped).map((p) => p.code)).toEqual([
+      'T4',
+      'T5',
+    ]);
+  });
+});

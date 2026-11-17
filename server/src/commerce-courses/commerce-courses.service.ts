@@ -7,9 +7,7 @@ import {
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CourseStorageService } from './storage.service';
-import { computeCompleteness } from './completeness';
 import { pickSummaryLocalization, summaryTitle } from './course-summary';
-import { detailToCompletenessInput } from './version-snapshot';
 import { HISTORY_ACTIONS, PublishingService } from './publishing.service';
 import { syncTextLearningPoints } from './course-authoring.service';
 import { draftContentHash, versionContentHash } from './content-hash';
@@ -236,11 +234,13 @@ export class CommerceCoursesService {
         : null;
     // 测试按语言保存；在 B14 之前页面仍只认默认内容语言的那一份（lesson.applicationTest）。
     const shaped = withDefaultLanguageTests(course);
+    // 完成度和 Publish 门禁用同一条路径（先拍快照再算），详情里看到的就是发布时会判的。
+    const completeness = await this.publishing.completenessForDraft(course.id);
     return {
       ...shaped,
       category: categoryRef(course.category),
       ...draftState,
-      completeness: computeCompleteness(detailToCompletenessInput(shaped)),
+      completeness,
     };
   }
 
