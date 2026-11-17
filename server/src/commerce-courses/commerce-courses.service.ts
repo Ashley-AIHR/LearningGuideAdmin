@@ -11,17 +11,62 @@ import { pickSummaryLocalization, summaryTitle } from './course-summary';
 import { HISTORY_ACTIONS, PublishingService } from './publishing.service';
 import { syncTextLearningPoints } from './course-authoring.service';
 import { runCourseWrite, type CourseTx } from './course-write';
+import {
+  assertCategoryBinding,
+  COURSE_LANGUAGES,
+  DEFAULT_LANGUAGE,
+  DEFAULT_LEARNING_MODE,
+  localizationData,
+  nullableText,
+  parseInformation,
+  parseLanguage,
+  parseLearningLanguages,
+  parseLearningMode,
+  parseLocalizationPatch,
+  parseTitles,
+  type CourseLanguage,
+  type LearningMode,
+  type LocalizationPatch,
+} from './course-info';
 import { categoryRef } from './localized-fields';
 import { allocateCourseCode, peekCourseCode } from './code-allocator';
 import { optionalString } from './input';
 import { withDefaultLanguageTests } from './lesson-tests';
 
-interface CourseUpdateBody {
+/** 新建请求体：新写法带 `titles`；旧写法 `title` + `language` 照常接受。 */
+export interface CourseCreateBody {
+  /** 已忽略：Course ID 由服务器分配（PRD L255），响应里是真实的编号。 */
+  code?: string;
+  /** 已忽略：slug 由服务器按课程名生成。 */
+  slug?: string;
+  title?: string;
+  language?: string;
+  titles?: Record<string, string>;
+  learningMode?: string;
+  defaultContentLanguage?: string;
+  learningLanguages?: string[];
+  subtitle?: string | null;
+  categoryId?: string | null;
+}
+
+export interface CourseUpdateBody {
   code?: string;
   slug?: string;
   learningMode?: string;
   defaultContentLanguage?: string;
   learningLanguages?: string[];
+  subtitle?: string | null;
+  level?: string | null;
+  categoryId?: string | null;
+}
+
+/** 校验、整理过的更新字段。 */
+interface CourseUpdatePatch {
+  code?: string;
+  slug?: string;
+  learningMode?: LearningMode;
+  defaultContentLanguage?: CourseLanguage;
+  learningLanguages?: CourseLanguage[];
   subtitle?: string | null;
   level?: string | null;
   categoryId?: string | null;
@@ -249,20 +294,6 @@ export class CommerceCoursesService {
   }
 
   // ===== 编辑工作区（草稿�?=====
-  private static readonly LEARNING_MODES = [
-    'VIDEO_ONLY',
-    'TEXT_ONLY',
-    'VIDEO_AND_TEXT',
-  ];
-  private normaliseMode(
-    mode?: string,
-  ): 'VIDEO_ONLY' | 'TEXT_ONLY' | 'VIDEO_AND_TEXT' {
-    const m = (mode ?? '').toUpperCase();
-    return (
-      CommerceCoursesService.LEARNING_MODES.includes(m) ? m : 'VIDEO_AND_TEXT'
-    ) as 'VIDEO_ONLY' | 'TEXT_ONLY' | 'VIDEO_AND_TEXT';
-  }
-
   /** 标题的拉丁字母部分；没有拉丁字母时为空，由调用方改用 Course ID。 */
   private slugify(input: string): string {
     return input
@@ -289,50 +320,66 @@ export class CommerceCoursesService {
     }
   }
 
-  async createCourse(
-    body: {
-      /** 已忽略：Course ID 由服务器分配（PRD L255），响应里是真实的编号。 */
-      code?: string;
-      slug?: string;
-      title: string;
-      language?: string;
-      learningMode?: string;
-      defaultContentLanguage?: string;
-      learningLanguages?: string[];
-      subtitle?: string | null;
-      categoryId?: string | null;
-    },
-    actorEmployeeId: string | null,
-  ) {
-    const title = optionalString(body.title, 'title') ?? '';
-    const language = body.defaultContentLanguage || body.language || 'en-GB';
-    const learningLanguages =
-      body.learningLanguages && body.learningLanguages.length > 0
-        ? body.learningLanguages
-        : [language];
+  /**
+   * 新建课程：一次请求、一个事务——分配 Course ID、建课程、建中英两份基本信息、写 History，
+   * 任何一步失败都整个回滚，不留半个课程，也不烧掉编号。
+   *
+   * 新请求体带 `titles`（每种语言的课程名）；旧请求体的 `title` + `language` 照旧能用，
+   * 按默认内容语言归入 `titles`。`code` 和 `slug` 不再由调用方指定。
+   */
+  async createCourse(body: CourseCreateBody, actorEmployeeId: string | null) {
+    const learningMode =
+      parseLearningMode(body.learningMode) ?? DEFAULT_LEARNING_MODE;
+    const language = parseLanguage(
+      body.defaultContentLanguage || body.language || DEFAULT_LANGUAGE,
+      'defaultContentLanguage',
+    );
+    const requested = parseLearningLanguages(body.learningLanguages);
+    const learningLanguages = requested?.length ? requested : [language];
+    if (!learningLanguages.includes(language)) {
+      throw new BadRequestException({
+        code: 'DEFAULT_LANGUAGE_NOT_LEARNING',
+        message: 'The default content language must be a learning language.',
+        details: { field: 'defaultContentLanguage' },
+      });
+    }
+    const titles = parseTitles(body.titles);
+    const legacyTitle = optionalString(body.title, 'title');
+    if (titles[language] === undefined && legacyTitle !== undefined) {
+      titles[language] = legacyTitle;
+    }
+    const subtitle = nullableText(body.subtitle, 'subtitle') ?? null;
+    const requestedCategory = nullableText(body.categoryId, 'categoryId');
+    const slugBase =
+      [titles[language], titles['en-GB'], titles['zh-CN']]
+        .map((title) => this.slugify(title ?? ''))
+        .find(Boolean) ?? '';
     // 两个同时创建、标题又相同的请求可能挑中同一个 slug：唯一键拒绝后整个事务（含编号）回滚，重试一次。
     for (let attempt = 1; ; attempt += 1) {
       try {
         const course = await this.prisma.$transaction(async (tx) => {
+          const categoryId = await assertCategoryBinding(tx, requestedCategory);
           const code = await allocateCourseCode(tx);
-          const slug = await this.freeSlug(tx, this.slugify(title), code);
+          const slug = await this.freeSlug(tx, slugBase, code);
           const created = await tx.commerceCourse.create({
             data: {
               code,
               slug,
-              learningMode: this.normaliseMode(body.learningMode),
+              learningMode,
               defaultContentLanguage: language,
-              learningLanguages: learningLanguages,
-              categoryId: body.categoryId || null,
-              subtitle: body.subtitle ?? null,
+              learningLanguages,
+              categoryId,
+              subtitle,
               hasDraft: true,
               lifecycleStatus: 'WORKING',
+              // 基本信息两种语言各一行；没填的课程名留空，完整性规则报 Required。
               localizations: {
-                create: {
-                  language,
-                  title,
-                  shortDescription: body.subtitle ?? null,
-                },
+                create: COURSE_LANGUAGES.map((courseLanguage) => ({
+                  language: courseLanguage,
+                  title: titles[courseLanguage] ?? '',
+                  shortDescription:
+                    courseLanguage === language ? subtitle : null,
+                })),
               },
               authors: actorEmployeeId
                 ? { create: { employeeId: actorEmployeeId } }
@@ -340,14 +387,16 @@ export class CommerceCoursesService {
             },
             select: { id: true },
           });
-          return { id: created.id, code };
+          await this.publishing.recordHistory(
+            created.id,
+            HISTORY_ACTIONS.CREATE_COURSE,
+            { courseCode: code, learningMode, learningLanguages },
+            actorEmployeeId,
+            undefined,
+            tx,
+          );
+          return { id: created.id };
         });
-        await this.publishing.recordHistory(
-          course.id,
-          HISTORY_ACTIONS.CREATE_COURSE,
-          { code: course.code },
-          actorEmployeeId,
-        );
         return this.detail(course.id);
       } catch (error) {
         if (
@@ -370,10 +419,15 @@ export class CommerceCoursesService {
     return { code: await peekCourseCode(this.prisma) };
   }
 
-  async updateCourse(id: string, body: CourseUpdateBody) {
+  async updateCourse(
+    id: string,
+    body: CourseUpdateBody,
+    actorEmployeeId: string | null = null,
+  ) {
+    const patch = this.parseCourseUpdate(body);
     try {
       await runCourseWrite(this.prisma, id, (tx) =>
-        this.applyCourseUpdate(tx, id, body),
+        this.applyCourseUpdate(tx, id, patch, actorEmployeeId),
       );
     } catch (error) {
       if (
@@ -390,10 +444,41 @@ export class CommerceCoursesService {
     return this.detail(id);
   }
 
+  /** 把请求体整理成已校验的字段；形状不对的在这里 400，不进事务。 */
+  private parseCourseUpdate(body: CourseUpdateBody): CourseUpdatePatch {
+    const code = optionalString(body.code, 'code');
+    const slug = optionalString(body.slug, 'slug');
+    if (slug !== undefined && !slug.trim()) {
+      throw new BadRequestException({
+        code: 'VALIDATION_ERROR',
+        message: 'slug cannot be empty.',
+        details: { field: 'slug' },
+      });
+    }
+    return {
+      code,
+      slug: slug?.trim(),
+      learningMode: parseLearningMode(body.learningMode),
+      defaultContentLanguage:
+        body.defaultContentLanguage === undefined ||
+        body.defaultContentLanguage === null
+          ? undefined
+          : parseLanguage(
+              body.defaultContentLanguage,
+              'defaultContentLanguage',
+            ),
+      learningLanguages: parseLearningLanguages(body.learningLanguages),
+      subtitle: nullableText(body.subtitle, 'subtitle'),
+      level: nullableText(body.level, 'level'),
+      categoryId: nullableText(body.categoryId, 'categoryId'),
+    };
+  }
+
   private async applyCourseUpdate(
     tx: CourseTx,
     id: string,
-    body: CourseUpdateBody,
+    body: CourseUpdatePatch,
+    actorEmployeeId: string | null,
   ) {
     const current = await tx.commerceCourse.findUnique({
       where: { id },
@@ -422,7 +507,7 @@ export class CommerceCoursesService {
     }
     if (
       body.learningMode !== undefined &&
-      this.normaliseMode(body.learningMode) !== current.learningMode
+      body.learningMode !== current.learningMode
     ) {
       throw new ConflictException({
         code: 'LEARNING_MODE_LOCKED',
@@ -431,7 +516,7 @@ export class CommerceCoursesService {
     }
     // 学习语言只能追加（PRD §22�?
     const existingLanguages = (current.learningLanguages as string[]) ?? [];
-    const requestedLanguages = body.learningLanguages;
+    const requestedLanguages: string[] | undefined = body.learningLanguages;
     if (
       requestedLanguages &&
       existingLanguages.some(
@@ -452,50 +537,135 @@ export class CommerceCoursesService {
         message: 'Learning languages can only be added, not removed.',
       });
     }
+    const finalLanguages = requestedLanguages ?? existingLanguages;
+    if (
+      body.defaultContentLanguage !== undefined &&
+      !finalLanguages.includes(body.defaultContentLanguage)
+    ) {
+      throw new BadRequestException({
+        code: 'DEFAULT_LANGUAGE_NOT_LEARNING',
+        message: 'The default content language must be a learning language.',
+        details: { field: 'defaultContentLanguage' },
+      });
+    }
+    const categoryId =
+      body.categoryId === undefined
+        ? undefined
+        : await assertCategoryBinding(tx, body.categoryId);
     await tx.commerceCourse.update({
       where: { id },
       data: {
-        ...(body.slug !== undefined ? { slug: body.slug.trim() } : {}),
+        ...(body.slug !== undefined ? { slug: body.slug } : {}),
         ...(body.defaultContentLanguage !== undefined
           ? { defaultContentLanguage: body.defaultContentLanguage }
           : {}),
-        ...(requestedLanguages !== undefined
-          ? { learningLanguages: requestedLanguages }
-          : {}),
         ...(body.subtitle !== undefined ? { subtitle: body.subtitle } : {}),
         ...(body.level !== undefined ? { level: body.level } : {}),
-        ...(body.categoryId !== undefined
-          ? { categoryId: body.categoryId || null }
-          : {}),
+        ...(categoryId !== undefined ? { categoryId } : {}),
       },
+    });
+    if (requestedLanguages !== undefined) {
+      await this.setLearningLanguages(
+        tx,
+        { id, code: current.code, learningLanguages: existingLanguages },
+        requestedLanguages,
+        actorEmployeeId,
+      );
+    }
+  }
+
+  /** 学习语言只增不减；多了语言就在同一个事务里写 ADD_LEARNING_LANGUAGE（PRD 历史记录）。 */
+  private async setLearningLanguages(
+    tx: CourseTx,
+    course: { id: string; code: string; learningLanguages: string[] },
+    requested: string[],
+    actorEmployeeId: string | null,
+  ) {
+    const added = requested.filter(
+      (language) => !course.learningLanguages.includes(language),
+    );
+    if (added.length === 0) return;
+    await tx.commerceCourse.update({
+      where: { id: course.id },
+      data: { learningLanguages: requested },
+    });
+    await this.publishing.recordHistory(
+      course.id,
+      HISTORY_ACTIONS.ADD_LEARNING_LANGUAGE,
+      {
+        courseCode: course.code,
+        from: course.learningLanguages,
+        to: requested,
+      },
+      actorEmployeeId,
+      undefined,
+      tx,
+    );
+  }
+
+  /** 只改这次发来的键；没发的键（课程名、概述、条目列表）保持原样。 */
+  private async saveLocalization(
+    tx: CourseTx,
+    courseId: string,
+    language: CourseLanguage,
+    patch: LocalizationPatch,
+  ) {
+    const data = localizationData(patch);
+    await tx.courseLocalization.upsert({
+      where: { courseId_language: { courseId, language } },
+      create: { courseId, language, title: '', ...data },
+      update: data,
     });
   }
 
-  async updateLocalization(
-    id: string,
-    language: string,
-    body: {
-      title: string;
-      shortDescription?: string | null;
-      overview?: string | null;
-      whatYouLearn?: unknown;
-      provides?: unknown;
-    },
-  ) {
-    const data = {
-      title: body.title,
-      shortDescription: body.shortDescription ?? null,
-      overview: body.overview ?? null,
-      whatYouLearn: (body.whatYouLearn ?? null) as Prisma.InputJsonValue,
-      provides: (body.provides ?? null) as Prisma.InputJsonValue,
-    };
+  async updateLocalization(id: string, language: string, body: unknown) {
+    const courseLanguage = parseLanguage(language, 'language');
+    const patch = parseLocalizationPatch(body);
     await runCourseWrite(this.prisma, id, (tx) =>
-      tx.courseLocalization.upsert({
-        where: { courseId_language: { courseId: id, language } },
-        create: { courseId: id, language, ...data },
-        update: data,
-      }),
+      this.saveLocalization(tx, id, courseLanguage, patch),
     );
+    return this.detail(id);
+  }
+
+  /**
+   * 第一步（Course Information）一次保存：分类、两种语言的基本信息、追加学习语言，
+   * 一个事务，哪一部分被拒就都不写。返回课程详情，里面带着还缺什么（completeness.issues）。
+   */
+  async updateInformation(
+    id: string,
+    body: unknown,
+    actorEmployeeId: string | null,
+  ) {
+    const input = parseInformation(body);
+    await runCourseWrite(this.prisma, id, async (tx) => {
+      const current = await tx.commerceCourse.findUniqueOrThrow({
+        where: { id },
+        select: { code: true, learningLanguages: true },
+      });
+      const existing = (current.learningLanguages as string[]) ?? [];
+      const requested = [
+        ...existing,
+        ...input.addLearningLanguages.filter(
+          (language) => !existing.includes(language),
+        ),
+      ];
+      await this.setLearningLanguages(
+        tx,
+        { id, code: current.code, learningLanguages: existing },
+        requested,
+        actorEmployeeId,
+      );
+      if (input.categoryId !== undefined) {
+        const categoryId = await assertCategoryBinding(tx, input.categoryId);
+        await tx.commerceCourse.update({
+          where: { id },
+          data: { categoryId },
+        });
+      }
+      for (const [language, patch] of input.localizations) {
+        await this.saveLocalization(tx, id, language, patch);
+      }
+    });
     return this.detail(id);
   }
 

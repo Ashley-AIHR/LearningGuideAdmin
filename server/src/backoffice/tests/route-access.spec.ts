@@ -112,6 +112,7 @@ describe('route access classification', () => {
       ['GET', '/api/backoffice/courses/next-code', 'VIEW'],
       ['POST', '/api/backoffice/courses', 'CREATE'],
       ['PUT', '/api/backoffice/courses/c1', 'EDIT_EXISTING'],
+      ['PUT', '/api/backoffice/courses/c1/information', 'EDIT_EXISTING'],
       [
         'PUT',
         '/api/backoffice/courses/c1/localizations/zh-cn',

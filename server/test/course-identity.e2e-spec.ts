@@ -45,7 +45,7 @@ describe('Course identity (e2e)', () => {
     expect(first.code).toMatch(/^C\d{3,}$/);
     expect(second.code).toMatch(/^C\d{3,}$/);
     expect(first.code).not.toBe(second.code);
-    expect(Math.abs(numberOf(first.code) - numberOf(second.code))).toBe(1);
+    // other suites create courses at the same time, so only distinctness can be asserted
   });
 
   it('ignores a Course ID typed by the Operator and returns the real one', async () => {
@@ -98,11 +98,20 @@ describe('Course identity (e2e)', () => {
 
   it('shows the code the next create will assign', async () => {
     const agent = await fixtures.admin();
-    const peek: SuccessResponse<{ code: string }> = await agent
-      .get('/api/backoffice/courses/next-code')
-      .expect(200);
-    const created = await fixtures.createCourse(agent, { title: 'Peeked' });
-    expect(created.code).toBe(peek.body.data.code);
+    // Suites run side by side and any of them may create a course between the peek and the
+    // create, so a few tries are allowed; a peek that took the code would never match.
+    const seen: string[] = [];
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const peek: SuccessResponse<{ code: string }> = await agent
+        .get('/api/backoffice/courses/next-code')
+        .expect(200);
+      const created = await fixtures.createCourse(agent, { title: 'Peeked' });
+      seen.push(`${peek.body.data.code}>${created.code}`);
+      if (created.code === peek.body.data.code) return;
+    }
+    throw new Error(
+      `The peeked code was never the one assigned: ${seen.join(', ')}`,
+    );
   });
 
   it('never repeats a code across 20 parallel creates', async () => {

@@ -69,6 +69,7 @@ export const HISTORY_ACTIONS = {
   CHANGE_STATUS: 'CHANGE_STATUS',
   OPERATIONS_PUBLISH: 'OPERATIONS_PUBLISH',
   CREATE_COURSE: 'CREATE_COURSE',
+  ADD_LEARNING_LANGUAGE: 'ADD_LEARNING_LANGUAGE',
 } as const;
 
 @Injectable()
@@ -604,14 +605,16 @@ export class PublishingService {
     };
   }
 
+  /** 写一条 History；传入事务连接时，和事务里的写入同成同败。 */
   async recordHistory(
     courseId: string | null,
     action: string,
     detail: unknown,
     actorEmployeeId: string | null,
     versionNo?: number,
+    db: PrismaService | Prisma.TransactionClient = this.prisma,
   ) {
-    return this.prisma.courseAuthoringActivity.create({
+    return db.courseAuthoringActivity.create({
       data: {
         courseId,
         versionNo: versionNo ?? null,

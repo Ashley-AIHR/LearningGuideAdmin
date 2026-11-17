@@ -17,7 +17,11 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import JSZip from 'jszip';
 import type { Response } from 'express';
 
-import { CommerceCoursesService } from './commerce-courses.service';
+import {
+  CommerceCoursesService,
+  type CourseCreateBody,
+  type CourseUpdateBody,
+} from './commerce-courses.service';
 import { PackageJobsService } from './package-jobs.service';
 import { PackageWorker } from './package-worker';
 import { PackageError } from './package-inspector';
@@ -89,21 +93,7 @@ export class CommerceCoursesController {
 
   @Post()
   @HttpCode(201)
-  create(
-    @Body()
-    body: {
-      code?: string;
-      slug?: string;
-      title: string;
-      language?: string;
-      learningMode?: string;
-      defaultContentLanguage?: string;
-      learningLanguages?: string[];
-      subtitle?: string | null;
-      categoryId?: string | null;
-    },
-    @Req() request: BackofficeRequest,
-  ) {
+  create(@Body() body: CourseCreateBody, @Req() request: BackofficeRequest) {
     return this.courses.createCourse(body, actor(request));
   }
 
@@ -283,35 +273,32 @@ export class CommerceCoursesController {
   @HttpCode(200)
   updateCourse(
     @Param('id') id: string,
-    @Body()
-    body: {
-      code?: string;
-      slug?: string;
-      learningMode?: string;
-      defaultContentLanguage?: string;
-      learningLanguages?: string[];
-      subtitle?: string | null;
-      level?: string | null;
-      categoryId?: string | null;
-    },
+    @Body() body: CourseUpdateBody,
+    @Req() request: BackofficeRequest,
   ) {
-    return this.courses.updateCourse(id, body);
+    return this.courses.updateCourse(id, body, actor(request));
   }
 
+  /** 第一步（Course Information）整体保存：分类、两种语言的基本信息、追加学习语言，一个事务。 */
+  @Put(':id/information')
+  @UseInterceptors(DraftRevisionInterceptor)
+  @HttpCode(200)
+  updateInformation(
+    @Param('id') id: string,
+    @Body() body: unknown,
+    @Req() request: BackofficeRequest,
+  ) {
+    return this.courses.updateInformation(id, body, actor(request));
+  }
+
+  /** 只改这次发来的键：没发的课程名、概述、条目列表保持原样。 */
   @Put(':id/localizations/:language')
   @UseInterceptors(DraftRevisionInterceptor)
   @HttpCode(200)
   updateLocalization(
     @Param('id') id: string,
     @Param('language') language: string,
-    @Body()
-    body: {
-      title: string;
-      shortDescription?: string | null;
-      overview?: string | null;
-      whatYouLearn?: unknown;
-      provides?: unknown;
-    },
+    @Body() body: unknown,
   ) {
     return this.courses.updateLocalization(id, language, body);
   }
