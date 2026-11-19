@@ -30,6 +30,19 @@ export class ImportError extends Error {
   }
 }
 
+/**
+ * 学习点身份 key：`lesson|language|source|code`（与 schema 的 @@unique 顺序一致）。
+ * 同一编号在 VIDEO / TEXT 下是两行，查找时必须带上 source，不能只用 lesson|code。
+ */
+function learningPointKey(
+  lessonCode: string,
+  language: string,
+  source: 'VIDEO' | 'TEXT',
+  code: string,
+): string {
+  return `${lessonCode}|${language}|${source}|${code}`;
+}
+
 interface ImportedMediaMeta {
   assetId: string;
   kind: string;
@@ -200,23 +213,56 @@ export class PackageImporter {
         const lessonCodeById = new Map(
           actualLessons.map((lesson) => [lesson.id, lesson.code]),
         );
+        // 学习点身份 = (lesson, language, source, code)：同一编号在 VIDEO / TEXT 下各有一行，
+        // 试看的文本截止点只能落到 TEXT 行（包规范 §4.2、§14），不能落到同编号的 VIDEO 行。
         const learningPoints = await tx.learningPoint.findMany({
           where: { lesson: { courseId } },
-          select: { id: true, lessonId: true, code: true },
+          select: {
+            id: true,
+            lessonId: true,
+            language: true,
+            code: true,
+            source: true,
+          },
         });
-        const lpIdByKey = new Map(
-          learningPoints.map((lp) => [
-            `${lessonCodeById.get(lp.lessonId) ?? ''}|${lp.code}`,
+        const lpIdByKey = new Map<string, string>();
+        const textPoints: Array<{
+          lessonCode: string;
+          code: string;
+          id: string;
+        }> = [];
+        const textPointIds = new Set<string>();
+        for (const lp of learningPoints) {
+          const lessonCode = lessonCodeById.get(lp.lessonId);
+          if (!lessonCode) continue;
+          lpIdByKey.set(
+            learningPointKey(lessonCode, lp.language, lp.source, lp.code),
             lp.id,
-          ]),
-        );
-        const lpIds = new Set(learningPoints.map((lp) => lp.id));
+          );
+          if (lp.source === 'TEXT') {
+            textPoints.push({ lessonCode, code: lp.code, id: lp.id });
+            textPointIds.add(lp.id);
+          }
+        }
+        // 包里的 trial 行没有语言字段：优先默认内容语言，否则接受该课时唯一一个
+        // 同编号的 TEXT 行；两种都不成立时返回 null，绝不回退到 VIDEO 行。
         const resolveCutoff = (lessonCode: string, ref?: string | null) => {
           if (!ref) return null;
-          return (
-            lpIdByKey.get(`${lessonCode}|${ref}`) ??
-            (lpIds.has(ref) ? ref : null)
+          const preferred = lpIdByKey.get(
+            learningPointKey(
+              lessonCode,
+              manifest.course.defaultContentLanguage,
+              'TEXT',
+              ref,
+            ),
           );
+          if (preferred) return preferred;
+          const matches = textPoints.filter(
+            (point) => point.lessonCode === lessonCode && point.code === ref,
+          );
+          if (matches.length === 1) return matches[0].id;
+          if (matches.length > 1) return null;
+          return textPointIds.has(ref) ? ref : null;
         };
 
         await tx.trialSetting.deleteMany({ where: { courseId } });
@@ -617,7 +663,11 @@ export class PackageImporter {
 
     // 课时
     const lessonIdByCode = new Map<string, string>();
+    // 学习点身份 = (lesson, language, source, code)，见 schema 的 @@unique；
+    // 试看的文本截止点只能绑 TEXT 行，不能绑同编号的 VIDEO 行。
     const lpIdByKey = new Map<string, string>();
+    const textPoints: Array<{ lessonCode: string; code: string; id: string }> =
+      [];
     const takenKnowledgeCodes = new Set<string>();
     for (const lesson of [...(course.lessons ?? [])].sort(
       (a, b) => a.order - b.order,
@@ -678,7 +728,10 @@ export class PackageImporter {
               sortOrder: order++,
             },
           });
-          lpIdByKey.set(`${lesson.code}|${lp.code}`, createdLp.id);
+          lpIdByKey.set(
+            learningPointKey(lesson.code, language, 'VIDEO', lp.code),
+            createdLp.id,
+          );
         }
         for (const lp of textLps) {
           const createdLp = await tx.learningPoint.create({
@@ -692,7 +745,15 @@ export class PackageImporter {
               sortOrder: order++,
             },
           });
-          lpIdByKey.set(`${lesson.code}|${lp.code}`, createdLp.id);
+          lpIdByKey.set(
+            learningPointKey(lesson.code, language, 'TEXT', lp.code),
+            createdLp.id,
+          );
+          textPoints.push({
+            lessonCode: lesson.code,
+            code: lp.code,
+            id: createdLp.id,
+          });
         }
         for (const trigger of loc.video?.exhibitTriggers ?? []) {
           const exId = exhibitIdByCode.get(trigger.exhibitRef);
@@ -775,7 +836,28 @@ export class PackageImporter {
       }
     }
 
-    // 试用
+    // 试用：文本截止点按 (lesson, language, source=TEXT, code) 解析（包规范 §4.2、§14）。
+    // 包里的 trial 行没有语言字段：优先默认内容语言，否则接受该课时唯一一个同编号的
+    // TEXT 行；绝不落到同编号的 VIDEO 行。
+    const resolveTextCutoff = (
+      lessonCode: string,
+      code?: string | null,
+    ): string | null => {
+      if (!code) return null;
+      const preferred = lpIdByKey.get(
+        learningPointKey(
+          lessonCode,
+          course.defaultContentLanguage,
+          'TEXT',
+          code,
+        ),
+      );
+      if (preferred) return preferred;
+      const matches = textPoints.filter(
+        (point) => point.lessonCode === lessonCode && point.code === code,
+      );
+      return matches.length === 1 ? matches[0].id : null;
+    };
     if (course.trial?.enabled) {
       for (const row of course.trial.lessons ?? []) {
         const lessonId = lessonIdByCode.get(row.lessonRef);
@@ -785,11 +867,10 @@ export class PackageImporter {
             courseId,
             lessonId,
             videoCutoffSeconds: row.videoCutoffSeconds ?? null,
-            textCutoffLearningPointId: row.textCutoffLearningPoint
-              ? (lpIdByKey.get(
-                  `${row.lessonRef}|${row.textCutoffLearningPoint}`,
-                ) ?? null)
-              : null,
+            textCutoffLearningPointId: resolveTextCutoff(
+              row.lessonRef,
+              row.textCutoffLearningPoint,
+            ),
             status: (row.status ?? 'READY') as never,
           },
         });

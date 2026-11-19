@@ -1156,7 +1156,8 @@ model LearningPoint {
   anchorHeading String?
   sortOrder     Int
 
-  @@unique([lessonId, language, code])
+  /// 学习点身份 = 课时 + 语言 + 来源 + 编号（包规范 §4.2：视频与文本学习点可以同编号）
+  @@unique([lessonId, language, source, code])
 }
 
 model ExhibitTrigger {
