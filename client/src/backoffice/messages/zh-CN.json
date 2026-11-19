@@ -139,6 +139,7 @@
     "expand": "展开侧边栏",
     "role": "角色",
     "settingsSection": "设置",
+    "noModulesEnabled": "当前环境未启用任何可用模块，请联系管理员。",
     "switchLanguage": "Switch to English (UK)"
   },
   "course": {

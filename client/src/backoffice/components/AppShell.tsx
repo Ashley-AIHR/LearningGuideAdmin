@@ -27,7 +27,6 @@ import { useLocale } from "../lib/navigation";
 import {
   menuFromPathSegments,
   menuHref,
-  visibleMenus,
   type MenuKey,
 } from "../rbac/permissions";
 import { boFetch, boRequest, postJson } from "../lib/api";
@@ -63,11 +62,14 @@ export type ShellEmployee = {
 
 export function AppShell({
   employee,
+  menus,
   workspace = false,
   initialCollapsed = false,
   children,
 }: {
   employee: ShellEmployee;
+  /** 侧栏菜单：ShellRoute 已按“角色权限 ∩ 已启用能力”算好，顺序按 PRD PORT-NAV-002 */
+  menus: readonly MenuKey[];
   /** Knowledge / AI Tutor 工作区占满内容区 */
   workspace?: boolean;
   /** PORT-NAV-003：登录后按账号偏好恢复折叠状态 */
@@ -91,7 +93,6 @@ export function AppShell({
     });
   }, []);
 
-  const menus = visibleMenus(employee.role);
   const roleLabel = t(locale, `roles.${employee.role}`);
 
   /** PORT-NAV-003：折叠状态按账号落库，失败不阻断交互。 */

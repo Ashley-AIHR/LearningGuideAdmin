@@ -2,20 +2,33 @@ import { useCallback, useEffect, useState } from 'react';
 import { Navigate, Outlet } from 'react-router-dom';
 import { AppShell } from './components/AppShell';
 import { boRequest } from './lib/api';
+import {
+  capabilitiesFromEnvironment,
+  capabilityForSegments,
+  filterMenusByCapabilities,
+  landingMenuFor,
+  rememberEnvironment,
+  type CapabilityId,
+  type EnvironmentResponse,
+} from './lib/capabilities';
 import { t } from './lib/i18n/messages';
 import { SESSION_CHANGED_EVENT, useLocale, usePathname } from './lib/navigation';
-import { menuFromPathSegments } from './rbac/permissions';
+import { menuFromPathSegments, menuHref, visibleMenus } from './rbac/permissions';
 import { SIGNED_OUT_CODES, EmployeeContext, WORKSPACE_MENUS } from './employeeSession';
 import type { SessionPayload, SessionState } from './employeeSession';
 
 /**
  * 登录后外壳：服务端 /api/session 是唯一事实来源。
  * 未登录跳到登录页；会话变化（登出、改密、接口 401）时重新读取。
+ * 能力集（ADMIN_CAPABILITIES）来自环境端点：菜单 = 角色权限 ∩ 已启用能力；
+ * 被禁用能力的路由直接重定向到第一个可用菜单（通常 course）。
  */
 export function ShellRoute() {
   const locale = useLocale()
   const pathname = usePathname()
   const [state, setState] = useState<SessionState>({ kind: 'loading' })
+  // null = 还在读；读完后是“全开”（字段缺失/旧服务端/读取失败）或启用子集
+  const [capabilities, setCapabilities] = useState<ReadonlySet<CapabilityId> | null>(null)
 
   const load = useCallback(() => {
     return boRequest<SessionPayload>('/api/session').then((result) => {
@@ -48,7 +61,18 @@ export function ShellRoute() {
     }
   }, [load])
 
-  if (state.kind === 'loading') {
+  // 能力集只读一次：环境端点缺 capabilities 字段（旧服务端）或读取失败 = 全开。
+  // 服务端仍会拦截禁用模块，这里只决定菜单与路由显示。
+  // 同一份结果写进 capabilities.ts 的模块级缓存：外壳内页面（预览入口、Operations 按钮）同步读取。
+  useEffect(() => {
+    void boRequest<EnvironmentResponse>('/api/backoffice/environment').then((result) => {
+      const payload = result.success ? result.data : null
+      rememberEnvironment(payload)
+      setCapabilities(capabilitiesFromEnvironment(payload))
+    })
+  }, [])
+
+  if (state.kind === 'loading' || capabilities === null) {
     return <div className="shellLoading">{t(locale, 'common.loading')}</div>
   }
   if (state.kind === 'unavailable') {
@@ -65,16 +89,36 @@ export function ShellRoute() {
     return <Navigate to={`/${locale}/sign-in`} replace />
   }
 
-  const menu = menuFromPathSegments(pathname.split('/').filter(Boolean).slice(1))
+  const segments = pathname.split('/').filter(Boolean).slice(1)
+  const roleMenus = visibleMenus(state.employee.role)
+  const menus = filterMenusByCapabilities(roleMenus, capabilities)
+  const required = capabilityForSegments(segments)
+  if (required !== null && !capabilities.has(required)) {
+    const landing = landingMenuFor(roleMenus, capabilities)
+    return landing === null ? <NoModulesCard /> : <Navigate to={menuHref(locale, landing)} replace />
+  }
+
+  const menu = menuFromPathSegments(segments)
   return (
     <EmployeeContext.Provider value={state.employee}>
       <AppShell
         employee={state.employee}
+        menus={menus}
         workspace={menu !== null && WORKSPACE_MENUS.has(menu)}
         initialCollapsed={state.sidebarState === 'collapsed'}
       >
         <Outlet />
       </AppShell>
     </EmployeeContext.Provider>
+  )
+}
+
+/** 所有菜单都被能力门关掉时的兜底：没有重定向落点，直接说明（不循环跳转）。 */
+function NoModulesCard() {
+  const locale = useLocale()
+  return (
+    <div className="shellLoading">
+      <p>{t(locale, 'shell.noModulesEnabled')}</p>
+    </div>
   )
 }
