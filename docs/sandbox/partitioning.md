@@ -39,8 +39,8 @@ flowchart LR
   E1 --> S1 & S2
   E1 --> N1 & N2 & N3
   subgraph CH["内容通道"]
-    P1["Sandbox 导出课程包（provenance.sourceEnv=sandbox）"]
-    P2["Production 只导入（provenance 门，开关默认 off）"]
+    P1["Sandbox 导出课程包（当前 v1：source.environment=Sandbox）"]
+    P2["Production 只导入（v2 provenance 门属 Part C 目标态，未接线）"]
   end
   P1 --> P2
 ```
@@ -122,7 +122,7 @@ Secrets  learning-guide/<admin/|>sandbox/<snake_case 键名>
 
 ### 5.3 冻结项（不改动）
 
-- **交付包规格**（`.lgcourse.zip` / manifest / import-export 格式）保持接手前原样。
+- **交付包规格**（`.lgcourse.zip` / manifest / import-export 格式）保持接手前原样。当前基线导出为 **v1 包**（`source.environment=Sandbox`、`sourceVersion`），**不含 v2 provenance**；v2 与 provenance 门属 Part C 目标态（未接线，黑盒 QA 已实测）。
 - **媒体上传规格**（格式白名单、大小上限、分块、时长探测、封面尺寸）保持接手前原样。
 - 课程管理底层不大改；上游已知行为（如 webm 无时长导致 Study 不完整、试看截止点为展示级）**记录不改**，见 `verify-takeover-20261116/upstream-preview-media-as-is.md`。
 

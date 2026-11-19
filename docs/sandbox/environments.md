@@ -108,12 +108,12 @@
 | 域名/Cookie | `sandbox.*` / `admin.sandbox.*` | 会话 Cookie 不在其它域生效（host-only） |
 | Stripe | 测试账号 + 独立 webhook | Checkout `livemode=false`；无 `sk_live_` |
 | 内容通道 | 只允许 Sandbox → Production 的课程包 | 反向/跨环境导入被拒（Part C 接线并开 `on` 后） |
-| 能力分区 | Admin 只开 `admin` 角色 | `/api/user/**`、`/api/ks/**` 不对外；Helpdesk 503；AI 变量未配置 |
+| 能力分区 | Admin 只起 `admin` 角色，且 `ADMIN_CAPABILITIES=course` | 非课程模块 API 404 `MODULE_NOT_ENABLED` + 菜单隐藏；Helpdesk/AI 变量未配置 |
 
 ## 8. 目标流程（能力/来源开关启用后）
 
 1. Operator 在 **Sandbox** 创作并验证课程（前台 + Stripe 沙盒 + 播放复核）。
-2. Sandbox 导出课程包（manifest v2，`provenance.sourceEnv=sandbox`，`sourceVersionLabel=X.Y`）。
+2. Sandbox 导出课程包。**当前基线（87e0be2）实际导出 v1 包**：`source.environment=Sandbox`、`sourceVersion=X.Y`，**不含 v2 provenance**；`provenance.sourceEnv` 与来源门属 Part C 目标态（未接线，黑盒 QA 已实测导出为 v1、无 provenance 字段）。
 3. Production（UAT）**只导入**该包 → plan preview/approve → Publish → Change status。
 4. Production 禁止内容编辑/新建/结构变更（服务端 403 `CAPABILITY_DISABLED`）。
 5. 每次生产发布后，`sandbox` 分支快进到该生产发布 SHA（UAT=当前生产，同码）；修复合入上游 dev 后随下一次生产发布进入 Sandbox。
