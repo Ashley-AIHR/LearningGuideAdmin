@@ -7,6 +7,7 @@ import { useResizableColumns } from '../components/resizableColumns'
 import { Pagination } from '../components/Pagination';
 import { usePageSize } from '../components/paginationState';
 import { boRequest } from '../lib/api'
+import { cachedCapabilities } from '../lib/capabilities'
 import { categoryLabel } from '../lib/categoryLabel'
 import { courseErrorText, courseFailureNotice, type CourseFailure } from '../lib/courseErrors'
 import { createCourseBody } from '../lib/courseRequests'
@@ -81,6 +82,9 @@ function CourseManagementInner({ locale }: { locale: ReturnType<typeof useLocale
   const navigate = useNavigate()
   const L = (zh: string, en: string) => (locale.startsWith('zh') ? zh : en)
   const canPublish = employee.role === 'ADMIN' || employee.role === 'OPERATION_ADMIN'
+  // 能力门：Operations 的接口与路由归属 operations 能力（sandbox 只开 course）；
+  // 能力未启用时不渲染按钮，避免指向被能力门 404 的操作页。能力集由 ShellRoute 拉环境端点时缓存。
+  const capabilities = cachedCapabilities()
   const [list, setList] = useState<CourseList | null>(null)
   const [loading, setLoading] = useState(true)
   const [page, setPage] = useState(1)
@@ -451,9 +455,11 @@ function CourseManagementInner({ locale }: { locale: ReturnType<typeof useLocale
         </div>
         {canPublish && (
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            <button type="button" className="button buttonGhost" disabled={busy} onClick={() => navigate(`/${locale}/operations`)}>
-              {L('运营位', 'Operations')}
-            </button>
+            {capabilities.has('operations') && (
+              <button type="button" className="button buttonGhost" disabled={busy} onClick={() => navigate(`/${locale}/operations`)}>
+                {L('运营位', 'Operations')}
+              </button>
+            )}
             <button type="button" className="button buttonGhost" disabled={busy} onClick={() => setShowCreate(true)}>
               {L('新建课程', 'Create course')}
             </button>

@@ -1,11 +1,12 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import type { CourseDetail, CourseVersion, HistoryPage, IncompleteLesson } from '../../contracts/course';
+import type { CourseDetail, CourseVersion, HistoryPage, IncompleteLesson, PortalPreviewLink } from '../../contracts/course';
 import { boRequest } from '../../lib/api';
 import { failureCode } from '../../lib/courseErrors';
 import { useReportFailure } from './feedback';
 import { t } from '../../lib/i18n/messages';
 import { serverText } from '../../lib/i18n/serverText';
+import { cachedPreviewEntry } from '../../lib/capabilities';
 import { useResizableColumns } from '../../components/resizableColumns';
 import { Field, Modal } from './shared';
 import { L, buttonStyle, card, dangerBtn, fmtDate, inputStyle, liveStatusLabel, primaryBtn } from './shared-utils';
@@ -56,6 +57,9 @@ export function CourseVersionsSection({
   const [importBusy, setImportBusy] = useState(false);
   const [exportVersion, setExportVersion] = useState('live');
   const [exportBusy, setExportBusy] = useState(false);
+  // 预览入口（PREVIEW_ENTRY）：learner = 上游学员视角预览页；portal = 生产投影渲染草稿（带 versionId）。
+  const previewEntry = cachedPreviewEntry();
+  const [previewOpeningId, setPreviewOpeningId] = useState<string | null>(null);
 
   const liveVersion = versions.find((version) => version.isLive);
   const sortedVersions = [...versions].sort((a, b) => b.versionNo - a.versionNo);
@@ -210,6 +214,34 @@ export function CourseVersionsSection({
     ? null
     : { codes: course.completeness.publishBlockerCodes ?? [], lessons: course.completeness.incompleteLessons ?? [] };
   const shownBlocked = blocked ?? serverBlocked;
+
+  async function openVersionPreview(version: CourseVersion) {
+    if (previewEntry !== 'portal') {
+      navigate(`/${locale}/course/${course.id}/preview?versionId=${version.id}`);
+      return;
+    }
+    // portal 模式：带 versionId 生成短时效预览链接并在新标签打开（与编辑器顶部预览同一套逻辑）。
+    setPreviewOpeningId(version.id);
+    const popup = window.open('about:blank', '_blank');
+    const query = new URLSearchParams({ locale, versionId: version.id });
+    const result = await boRequest<PortalPreviewLink>(
+      `/api/backoffice/courses/${course.id}/portal-preview?${query.toString()}`,
+    );
+    setPreviewOpeningId(null);
+    if (!result.success) {
+      popup?.close();
+      onNotice(
+        `${L(locale, '无法生成 Portal 预览链接。', 'Could not create Portal preview link.')} ${result.message ?? result.error}`,
+      );
+      return;
+    }
+    if (popup) {
+      popup.opener = null;
+      popup.location.href = result.data.url;
+      return;
+    }
+    window.open(result.data.url, '_blank', 'noopener,noreferrer');
+  }
   const gaps = [
     !course.completeness.steps.courseInformation.complete ? L(locale, '课程信息', 'Course Information') : null,
     ...(course.completeness.incompleteLessons ?? []).map(
@@ -295,7 +327,14 @@ export function CourseVersionsSection({
                 <td>{version.sourceVersionLabel ?? version.sourceEnvironment ?? '—'}</td>
                 <td>
                   <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                    <button type="button" style={buttonStyle} onClick={() => navigate(`/${locale}/course/${course.id}/preview?versionId=${version.id}`)}>{L(locale, '查看', 'View')}</button>
+                    <button
+                      type="button"
+                      style={buttonStyle}
+                      disabled={previewOpeningId === version.id}
+                      onClick={() => void openVersionPreview(version)}
+                    >
+                      {previewOpeningId === version.id ? L(locale, '打开中…', 'Opening…') : L(locale, '查看', 'View')}
+                    </button>
                     {canPublish && !version.isLive && <button type="button" style={buttonStyle} disabled={busy} onClick={() => setRestoreVersion(version)}>{L(locale, '恢复', 'Restore')}</button>}
                   </div>
                 </td>

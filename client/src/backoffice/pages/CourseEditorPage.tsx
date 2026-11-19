@@ -5,6 +5,7 @@ import type {
   CourseDetail,
   CourseVersion,
   HistoryPage,
+  PortalPreviewLink,
   TrialSettings,
 } from '../contracts/course';
 import { useEmployee } from '../employeeSession';
@@ -12,6 +13,7 @@ import { boRequest, type ApiFailure } from '../lib/api';
 import { courseErrorText, courseFailureNotice, failureNeedsReload, isStale } from '../lib/courseErrors';
 import { t } from '../lib/i18n/messages';
 import type { Locale } from '../lib/i18n/config';
+import { cachedPreviewEntry } from '../lib/capabilities';
 import { isActionAllowed } from '../rbac/permissions';
 import { categoryLabel } from '../lib/categoryLabel';
 import { FailureProvider } from './course-editor/feedback';
@@ -62,6 +64,10 @@ export function CourseEditorPage() {
     },
     [locale],
   );
+
+  // 预览入口（PREVIEW_ENTRY）：learner = 上游学员视角预览页；portal = 生产投影渲染草稿（一次点击生成链接并打开）。
+  const previewEntry = cachedPreviewEntry();
+  const [previewOpening, setPreviewOpening] = useState(false);
 
   const fetchLoad = useCallback(() => {
     return Promise.all([
@@ -119,6 +125,36 @@ export function CourseEditorPage() {
     void fetchLoad();
   }, [fetchLoad]);
 
+  async function openPreview() {
+    if (previewEntry !== 'portal') {
+      navigate(`/${locale}/course/${courseId}/preview`);
+      return;
+    }
+    if (!course) return;
+    // portal 模式：一次点击生成短时效预览链接并在新标签打开（草稿不带 versionId）。
+    // popup 必须在 await 前同步打开，避免被浏览器当作弹窗拦截。
+    setPreviewOpening(true);
+    const popup = window.open('about:blank', '_blank');
+    const query = new URLSearchParams({ locale });
+    const result = await boRequest<PortalPreviewLink>(
+      `/api/backoffice/courses/${course.id}/portal-preview?${query.toString()}`,
+    );
+    setPreviewOpening(false);
+    if (!result.success) {
+      popup?.close();
+      setNotice(
+        `${L(locale, '无法生成 Portal 预览链接。', 'Could not create Portal preview link.')} ${result.message ?? result.error}`,
+      );
+      return;
+    }
+    if (popup) {
+      popup.opener = null;
+      popup.location.href = result.data.url;
+      return;
+    }
+    window.open(result.data.url, '_blank', 'noopener,noreferrer');
+  }
+
   const liveVersion = useMemo(() => versions.find((version) => version.isLive), [versions]);
   const localizedCategories = useMemo(
     () => categories.map((category) => ({ ...category, name: categoryLabel(locale, category.name) })),
@@ -145,7 +181,13 @@ export function CourseEditorPage() {
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
           <button type="button" style={buttonStyle} onClick={() => void load()}>{L(locale, '重新加载', 'Reload')}</button>
-          <button type="button" style={buttonStyle} onClick={() => navigate(`/${locale}/course/${course.id}/preview`)}>{L(locale, '学员视角预览', 'Preview as learner')}</button>
+          <button type="button" style={buttonStyle} disabled={previewOpening} onClick={() => void openPreview()}>
+            {previewOpening
+              ? L(locale, '生成预览链接…', 'Creating preview link…')
+              : previewEntry === 'portal'
+                ? L(locale, '在 Portal 中预览', 'Preview in Portal')
+                : L(locale, '学员视角预览', 'Preview as learner')}
+          </button>
           <button type="button" style={primaryBtn} onClick={() => setTab('versions')}>{L(locale, '版本与发布', 'Versions & publishing')}</button>
         </div>
       </header>
