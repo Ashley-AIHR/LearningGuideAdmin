@@ -27,6 +27,7 @@ import {
 import { TrialService } from './trial.service';
 import { snapshotContentHash, versionContentHash } from './content-hash';
 import { employeeNames, operatorName } from './employee-names';
+import { oneOf } from './input';
 
 export interface VersionLabelResult {
   label: string;
@@ -71,6 +72,39 @@ export const HISTORY_ACTIONS = {
   CREATE_COURSE: 'CREATE_COURSE',
   ADD_LEARNING_LANGUAGE: 'ADD_LEARNING_LANGUAGE',
 } as const;
+
+/** Change status 只接受三种线上状态，且必须说明原因（PRD §21）。 */
+export const LIVE_STATUSES = ['ONLINE', 'HIDDEN', 'OFFLINE'] as const;
+export type LiveStatusValue = (typeof LIVE_STATUSES)[number];
+
+export interface ChangeStatusInput {
+  status: LiveStatusValue;
+  reason: string;
+}
+
+/**
+ * Change status 请求体的正式契约：status 必填且必须是三种状态之一，reason 必须是非空文字。
+ *
+ * 以前直接把 body 交给 Prisma：缺 status 时 `data.liveStatus = undefined` 被忽略，
+ * 请求返回 200 却什么都不改（QA 黑盒复现）。现在形状错误显式拒绝：
+ * status 缺失/非法 → 400 VALIDATION_ERROR（details.field=status）；
+ * reason 缺失/空白 → 409 REASON_REQUIRED（保持原有业务码）。
+ */
+export function parseChangeStatusBody(body: unknown): ChangeStatusInput {
+  const input =
+    typeof body === 'object' && body !== null && !Array.isArray(body)
+      ? (body as Record<string, unknown>)
+      : {};
+  const status = oneOf(input.status, LIVE_STATUSES, 'status');
+  const reason = typeof input.reason === 'string' ? input.reason.trim() : '';
+  if (!reason) {
+    throw new ConflictException({
+      code: 'REASON_REQUIRED',
+      message: 'A reason is required to change status.',
+    });
+  }
+  return { status, reason };
+}
 
 @Injectable()
 export class PublishingService {
@@ -397,16 +431,10 @@ export class PublishingService {
   /** Change status：Online / Hidden / Offline，必须填原因；不生成版本。 */
   async changeStatus(
     courseId: string,
-    body: { status: 'ONLINE' | 'HIDDEN' | 'OFFLINE'; reason?: string },
+    body: unknown,
     actorEmployeeId: string | null,
   ) {
-    const reason = (body.reason ?? '').trim();
-    if (!reason) {
-      throw new ConflictException({
-        code: 'REASON_REQUIRED',
-        message: 'A reason is required to change status.',
-      });
-    }
+    const { status, reason } = parseChangeStatusBody(body);
     const course = await this.prisma.commerceCourse.findUnique({
       where: { id: courseId },
       select: { id: true, liveVersionId: true, liveStatus: true },
@@ -426,19 +454,19 @@ export class PublishingService {
     await this.prisma.$transaction([
       this.prisma.commerceCourse.update({
         where: { id: courseId },
-        data: { liveStatus: body.status },
+        data: { liveStatus: status },
       }),
       this.prisma.courseAuthoringActivity.create({
         data: {
           courseId,
           actorEmployeeId,
           action: HISTORY_ACTIONS.CHANGE_STATUS,
-          detail: { from, to: body.status, reason },
+          detail: { from, to: status, reason },
           reason,
         },
       }),
     ]);
-    return { from, to: body.status, reason };
+    return { from, to: status, reason };
   }
 
   async listVersions(courseId: string) {

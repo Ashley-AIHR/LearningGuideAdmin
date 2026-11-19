@@ -25,7 +25,7 @@ describe('Commerce course workflow (e2e)', () => {
   const code = `E2E-WF-${Date.now()}`;
   // Course codes are handed out by the server now, so each course made here is
   // remembered by the id the create call returned (and removed again afterwards).
-  const ownIds: Partial<Record<'P' | 'H' | 'R' | 'L' | 'O', string>> = {};
+  const ownIds: Partial<Record<'P' | 'H' | 'R' | 'L' | 'O' | 'S', string>> = {};
 
   beforeAll(async () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
@@ -197,6 +197,105 @@ describe('Commerce course workflow (e2e)', () => {
     } finally {
       spy.mockRestore();
     }
+  });
+
+  it('requires a valid status and a reason before changing live status (QA regression)', async () => {
+    const agent = await signInAs(app, 'ADMIN');
+    const created: SuccessResponse<{ id: string }> = await agent
+      .post('/api/backoffice/courses')
+      .send({ title: `${code} live status` });
+    const id: string = created.body.data.id;
+    ownIds.S = id;
+    await agent
+      .post(`/api/backoffice/courses/${id}/lessons`)
+      .send({ title: 'One' })
+      .expect(201);
+
+    // 没有线上版本时不能改状态：409 NOT_PUBLISHED（保持不变）
+    const unpublished: ErrorResponse = await agent
+      .post(`/api/backoffice/courses/${id}/live-status`)
+      .send({ status: 'ONLINE', reason: 'QA' });
+    expect(unpublished.status).toBe(409);
+    expect(unpublished.body.error.code).toBe('NOT_PUBLISHED');
+
+    // 发布后 liveStatus 为 OFFLINE
+    const publishing = app.get(PublishingService);
+    const spy = jest
+      .spyOn(publishing, 'completenessForDraft')
+      .mockResolvedValue({ canPublish: true, publishBlockers: [] } as never);
+    try {
+      await agent
+        .post(`/api/backoffice/courses/${id}/publish`)
+        .send({})
+        .expect(200);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(
+      (await prisma.commerceCourse.findUniqueOrThrow({ where: { id } }))
+        .liveStatus,
+    ).toBe('OFFLINE');
+
+    // QA 黑盒场景：body 里没有 status，旧实现返回 200 但什么都不改。现在必须 400。
+    const missingStatus: ErrorResponse = await agent
+      .post(`/api/backoffice/courses/${id}/live-status`)
+      .send({ reason: '缺少状态' });
+    expect(missingStatus.status).toBe(400);
+    expect(missingStatus.body.error.code).toBe('VALIDATION_ERROR');
+    expect(missingStatus.body.error.details?.field).toBe('status');
+    expect(
+      (await prisma.commerceCourse.findUniqueOrThrow({ where: { id } }))
+        .liveStatus,
+    ).toBe('OFFLINE');
+    expect(
+      await prisma.courseAuthoringActivity.count({
+        where: { courseId: id, action: 'CHANGE_STATUS' },
+      }),
+    ).toBe(0);
+
+    // status 不在三种状态里也是 400，不能静默成功
+    const invalidStatus: ErrorResponse = await agent
+      .post(`/api/backoffice/courses/${id}/live-status`)
+      .send({ status: 'LIVE', reason: '非法状态' });
+    expect(invalidStatus.status).toBe(400);
+    expect(invalidStatus.body.error.code).toBe('VALIDATION_ERROR');
+
+    // 缺 reason 仍是 409 REASON_REQUIRED
+    const noReason: ErrorResponse = await agent
+      .post(`/api/backoffice/courses/${id}/live-status`)
+      .send({ status: 'ONLINE' });
+    expect(noReason.status).toBe(409);
+    expect(noReason.body.error.code).toBe('REASON_REQUIRED');
+
+    // 正确 body：更新 liveStatus 并写一条 CHANGE_STATUS history（from/to/reason）
+    const changed: SuccessResponse<{
+      from: string;
+      to: string;
+      reason: string;
+    }> = await agent
+      .post(`/api/backoffice/courses/${id}/live-status`)
+      .send({ status: 'ONLINE', reason: '  Go online  ' });
+    expect(changed.status).toBe(200);
+    expect(changed.body.data).toEqual({
+      from: 'OFFLINE',
+      to: 'ONLINE',
+      reason: 'Go online',
+    });
+    expect(
+      (await prisma.commerceCourse.findUniqueOrThrow({ where: { id } }))
+        .liveStatus,
+    ).toBe('ONLINE');
+    const events = await prisma.courseAuthoringActivity.findMany({
+      where: { courseId: id, action: 'CHANGE_STATUS' },
+    });
+    expect(events).toHaveLength(1);
+    expect(events[0].detail).toEqual({
+      from: 'OFFLINE',
+      to: 'ONLINE',
+      reason: 'Go online',
+    });
+    expect(events[0].reason).toBe('Go online');
+    expect(events[0].actorEmployeeId).toBeTruthy();
   });
 
   it('keeps course events append-only, each with its transaction id', async () => {
