@@ -1246,10 +1246,11 @@ model Course {
 | `POST` | `/courses/:id/publish-uat` | `{ expectedUpdatedAt }` | PUBLISH |
 | `POST` | `/courses/:id/approve` | `{ expectedUpdatedAt }` | PUBLISH |
 | `POST` | `/courses/:id/go-live` | `{ expectedUpdatedAt, notifyLearners: boolean }` | PUBLISH |
-| `POST` | `/courses/:id/live-status` | `{ status: "ONLINE|HIDDEN|OFFLINE", reason?, expectedUpdatedAt }` | PUBLISH |
+| `POST` | `/courses/:id/live-status` | `{ status: "ONLINE|HIDDEN|OFFLINE", reason }`（status、reason 均必填） | PUBLISH |
 | `POST` | `/courses/:id/restore` | `{ versionId, expectedUpdatedAt }` | EDIT_EXISTING |
 
-- 均返回最新课程摘要；`expectedUpdatedAt` 不匹配返回 `409 COURSE_STALE_VERSION`。
+- **实现现状（2026-11，以代码为准）**：本节表格中的 `expectedUpdatedAt` 乐观锁未落地；草稿写入的并发保护改用 `If-Match: "r<revision>"`（不匹配返回 `409 COURSE_STALE`，见 `draft-revision.ts`）。`publish-uat` / `approve` / `go-live` 已按 PRD v2 合并为 `POST /courses/:id/publish`，`restore` 的 body 为 `{ versionId }`（见 `Course_Management_PRD_v2_Aligned_Design.md` §4.1）。
+- `live-status` 现行契约：body `{ status, reason }`，两项都必填。`status` 缺失或不在 `ONLINE / HIDDEN / OFFLINE` 内返回 `400 VALIDATION_ERROR`（`details.field=status`）；`reason` 缺失或空白返回 `409 REASON_REQUIRED`；课程还没有线上版本返回 `409 NOT_PUBLISHED`。成功时不生成版本，更新 `liveStatus` 并写一条 `CHANGE_STATUS` History（`from` / `to` / `reason`）。
 - `go-live` 生成新 `CourseVersion`（`snapshotData` 为当前 working copy），更新 `liveVersionId`，可选通知学员。
 - `approve` 前要求 `lifecycleStatus = IN_UAT` 且内容完整（§3.4）。
 
@@ -1296,10 +1297,10 @@ model Course {
 | `description` | 否 | ≤60 |
 | `video.file` | 条件 | `learningMode` 含视频时必填 |
 | `video.durationSeconds` | 否 | 导入时可由文件读取校验 |
-| `video.learningPoints[].timeSeconds` | 是 | ≥0 且 ≤时长；`code` 唯一 |
+| `video.learningPoints[].timeSeconds` | 是 | ≥0 且 ≤时长；同一语言同一课时内视频组 `code` 唯一 |
 | `video.exhibitTriggers[].exhibitRef` | 是 | 必须指向本课时展品 |
 | `text.html` | 条件 | `learningMode` 含文本时必填；≤ 内容限额 |
-| `text.learningPoints[].heading` | 是 | 必须是 HTML 中的 H1 |
+| `text.learningPoints[].heading` | 是 | 必须是 HTML 中的 H1；同一语言同一课时内文本组 `code` 唯一 |
 | `exhibits[].code` | 是 | `E\d{3,}`，课时内唯一 |
 | `exhibits[].type` | 是 | `IMAGE/VIDEO/MODEL3D` |
 | `exhibits[].thumbnail` | 条件 | 视频/3D 必填（除非允许自动生成） |
@@ -1308,7 +1309,9 @@ model Course {
 | `knowledgeTest.questions[].referenceAnswer` | 否 | 缺失仅 warning（导出保留） |
 | `applicationTest.scenario` | 条件 | `applicationTest.enabled=true` 时必填 |
 | `trial.lessons[].videoCutoffSeconds` | 否 | ≤ 视频时长 |
-| `trial.lessons[].textCutoffLearningPoint` | 否 | 必须指向存在的学习点 `code` |
+| `trial.lessons[].textCutoffLearningPoint` | 否 | 必须指向存在的学习点 `code`；解析到 TEXT 学习点，不会落到同编号的 VIDEO 学习点 |
+
+> 学习点身份 = 课时 + 语言 + 来源（VIDEO / TEXT）+ `code`。同一课时同一语言下，视频学习点与文本学习点可以使用相同 `code`（见 §4.2 的 `1.1`），两组各自编号唯一；导入/导出都原样保留 `code`。
 
 ### 16.3 完整性与导入结果
 
