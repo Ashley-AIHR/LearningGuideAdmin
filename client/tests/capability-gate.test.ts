@@ -10,7 +10,7 @@ import {
   MENU_CAPABILITY,
   cachedCapabilities,
   cachedPreviewEntry,
-  capabilityForSegments,
+  capabilitiesForSegments,
   capabilitiesFromEnvironment,
   filterMenusByCapabilities,
   landingMenuFor,
@@ -77,9 +77,11 @@ test('菜单 = 角色可见菜单 ∩ 已启用能力，PORT-NAV-002 顺序不�
 
 test('每个菜单都有对应能力（新增菜单必须来登记）', () => {
   for (const menu of MENU_ORDER) {
-    assert.ok(MENU_CAPABILITY[menu], menu)
+    assert.ok(MENU_CAPABILITY[menu]?.length, menu)
   }
   assert.equal(Object.keys(MENU_CAPABILITY).length, MENU_ORDER.length)
+  // settings 可由 settings 或 accounts 任一能力打开（Sandbox 只开 accounts）
+  assert.deepEqual(MENU_CAPABILITY.settings, ['settings', 'accounts'])
   // 能力标识与服务端保持同一套
   assert.deepEqual(
     [...CAPABILITY_IDS],
@@ -93,23 +95,27 @@ test('每个菜单都有对应能力（新增菜单必须来登记）', () => {
       'reporting',
       'order',
       'settings',
+      'accounts',
     ],
   )
 })
 
 test('路由第一段 → 能力；未登记路由不参与能力重定向', () => {
-  assert.equal(capabilityForSegments(['course', 'c1', 'preview']), 'course')
-  assert.equal(capabilityForSegments(['operations']), 'operations')
-  assert.equal(capabilityForSegments(['knowledge']), 'knowledge')
-  assert.equal(capabilityForSegments(['ai-tutor']), 'ai')
-  assert.equal(capabilityForSegments(['order']), 'order')
-  assert.equal(capabilityForSegments(['reporting']), 'reporting')
-  assert.equal(capabilityForSegments(['student']), 'students')
-  assert.equal(capabilityForSegments(['help-desk', 't1']), 'helpdesk')
-  assert.equal(capabilityForSegments(['settings', 'employee-account']), 'settings')
-  assert.equal(capabilityForSegments([]), null)
-  assert.equal(capabilityForSegments(undefined), null)
-  assert.equal(capabilityForSegments(['unknown']), null)
+  assert.deepEqual(capabilitiesForSegments(['course', 'c1', 'preview']), ['course'])
+  assert.deepEqual(capabilitiesForSegments(['operations']), ['operations'])
+  assert.deepEqual(capabilitiesForSegments(['knowledge']), ['knowledge'])
+  assert.deepEqual(capabilitiesForSegments(['ai-tutor']), ['ai'])
+  assert.deepEqual(capabilitiesForSegments(['order']), ['order'])
+  assert.deepEqual(capabilitiesForSegments(['reporting']), ['reporting'])
+  assert.deepEqual(capabilitiesForSegments(['student']), ['students'])
+  assert.deepEqual(capabilitiesForSegments(['help-desk', 't1']), ['helpdesk'])
+  // accounts 能力只覆盖员工账号子页；其它 Settings 子项仍要 settings
+  assert.deepEqual(capabilitiesForSegments(['settings', 'employee-account']), ['settings', 'accounts'])
+  assert.deepEqual(capabilitiesForSegments(['settings', 'learning-access']), ['settings'])
+  assert.deepEqual(capabilitiesForSegments(['settings']), ['settings', 'accounts'])
+  assert.equal(capabilitiesForSegments([]), null)
+  assert.equal(capabilitiesForSegments(undefined), null)
+  assert.equal(capabilitiesForSegments(['unknown']), null)
 })
 
 test('禁用路由的落点：角色可见且能力启用的第一个菜单，否则 null', () => {

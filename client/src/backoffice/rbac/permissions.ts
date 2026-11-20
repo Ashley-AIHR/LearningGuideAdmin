@@ -176,11 +176,29 @@ export function settingsSubHref(locale: string, sub: SettingsSubKey): string {
   return `/${locale}/${MENU_SEGMENT.settings}/${SETTINGS_SUB_SEGMENT[sub]}`;
 }
 
-/** 非 Admin 看不到 Employee Account 子项（PORT-§3.3 / §15.3）。 */
-export function visibleSettingsSubs(role: EmployeeRole): SettingsSubKey[] {
-  return SETTINGS_SUB_ORDER.filter(
-    (sub) => sub !== "employeeAccount" || canAccessEmployeeAccount(role)
-  );
+/**
+ * Settings 子项 = 角色可见 ∩ 环境能力 ∩ 账号功能键。
+ * - capabilities / features 传 null = 旧调用（只按角色过滤，保持既有行为）；
+ * - employeeAccount 由 module.accounts（环境能力 accounts 或 settings）单独控制；
+ * - 其它子项仍要 module.settings（环境能力 settings）。
+ */
+export function visibleSettingsSubs(
+  role: EmployeeRole,
+  capabilities: ReadonlySet<string> | null = null,
+  features: ReadonlySet<string> | null = null
+): SettingsSubKey[] {
+  return SETTINGS_SUB_ORDER.filter((sub) => {
+    if (sub === "employeeAccount" && !canAccessEmployeeAccount(role)) return false
+    if (capabilities !== null) {
+      const anyOf = sub === "employeeAccount" ? ["settings", "accounts"] : ["settings"]
+      if (!anyOf.some((id) => capabilities.has(id))) return false
+    }
+    if (features !== null) {
+      const featureKey = sub === "employeeAccount" ? "module.accounts" : "module.settings"
+      if (!features.has(featureKey)) return false
+    }
+    return true
+  })
 }
 
 export function menuFromPathSegments(segments: string[] | undefined): MenuKey | null {

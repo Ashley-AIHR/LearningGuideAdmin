@@ -1,4 +1,4 @@
-import type { MenuKey } from '../rbac/permissions'
+import { MENU_ORDER, type MenuKey } from '../rbac/permissions'
 
 /**
  * 前端能力门 —— 与服务端 ADMIN_CAPABILITIES 同名同义（server/src/common/capabilities.ts）。
@@ -17,7 +17,8 @@ export const CAPABILITY_IDS = [
   'operations', // 运营位：/api/backoffice/operations
   'reporting', // 报表：占位菜单，没有后端路由
   'order', // 订单：占位菜单，没有后端路由
-  'settings', // 设置：员工账号与学习权限
+  'settings', // 设置：学习权限与其它 Settings 子项
+  'accounts', // 员工账号管理：/api/admin/employees（独立于 settings，Sandbox 只开它）
 ] as const
 
 export type CapabilityId = (typeof CAPABILITY_IDS)[number]
@@ -92,16 +93,59 @@ export function cachedPreviewEntry(): PreviewEntry {
   return environmentCache.previewEntry
 }
 
-/** 菜单 ↔ 能力：一一对应、可解释；侧栏顺序仍由 MENU_ORDER 决定。 */
-export const MENU_CAPABILITY: Record<MenuKey, CapabilityId> = {
-  course: 'course',
-  knowledge: 'knowledge',
-  aiTutor: 'ai',
-  order: 'order',
-  reporting: 'reporting',
-  student: 'students',
-  helpDesk: 'helpdesk',
-  settings: 'settings',
+/**
+ * 账号级功能键（服务端 GET /api/session 的 features，已含环境 ∩ 角色 ∩ 账号开关）。
+ * null = 旧服务端 / 尚未返回：不做账号级限制（角色 + 环境能力照常生效）。
+ */
+export type AccountFeatures = ReadonlySet<string> | null
+
+/** 解析会话里的生效功能键集合：缺失 / 非数组 = 不额外限制；空数组 = 该账号没有任何生效功能。 */
+export function accountFeaturesFromSession(
+  payload: { features?: unknown } | null | undefined,
+): AccountFeatures {
+  const raw = payload?.features
+  if (!Array.isArray(raw)) return null
+  return new Set(raw.filter((item): item is string => typeof item === 'string'))
+}
+
+/**
+ * 会话级缓存：ShellRoute 拿到 /api/session 后写入，Settings 子导航等外壳内组件同步读取。
+ * 默认 null（旧服务端语义：不额外限制）。
+ */
+let accountFeaturesCache: AccountFeatures = null
+
+export function rememberAccountFeatures(
+  payload: { features?: unknown } | null | undefined,
+): void {
+  accountFeaturesCache = accountFeaturesFromSession(payload)
+}
+
+export function cachedAccountFeatures(): AccountFeatures {
+  return accountFeaturesCache
+}
+
+/** 菜单 ↔ 环境能力：一一对应、可解释；settings 可由 settings 或 accounts 任一能力打开。 */
+export const MENU_CAPABILITY: Record<MenuKey, readonly CapabilityId[]> = {
+  course: ['course'],
+  knowledge: ['knowledge'],
+  aiTutor: ['ai'],
+  order: ['order'],
+  reporting: ['reporting'],
+  student: ['students'],
+  helpDesk: ['helpdesk'],
+  settings: ['settings', 'accounts'],
+}
+
+/** 菜单 ↔ 账号级模块功能键；settings 的「账号管理」由 module.accounts 独立控制。 */
+export const MENU_FEATURE_KEYS: Record<MenuKey, readonly string[]> = {
+  course: ['module.course'],
+  knowledge: ['module.knowledge'],
+  aiTutor: ['module.ai'],
+  order: ['module.order'],
+  reporting: ['module.reporting'],
+  student: ['module.students'],
+  helpDesk: ['module.helpdesk'],
+  settings: ['module.settings', 'module.accounts'],
 }
 
 /** 侧栏菜单 = 角色权限（RBAC 继续生效）∩ 已启用能力，顺序不变（PORT-NAV-002）。 */
@@ -109,33 +153,102 @@ export function filterMenusByCapabilities(
   menus: readonly MenuKey[],
   enabled: ReadonlySet<CapabilityId>,
 ): MenuKey[] {
-  return menus.filter((menu) => enabled.has(MENU_CAPABILITY[menu]))
+  return menus.filter((menu) => MENU_CAPABILITY[menu].some((id) => enabled.has(id)))
 }
 
-/** 路由第一段 → 能力；未登记（含 Shell 之外的页面）= null，不做能力重定向。 */
-const SEGMENT_CAPABILITY: Record<string, CapabilityId> = {
-  course: 'course',
-  operations: 'operations',
-  knowledge: 'knowledge',
-  'ai-tutor': 'ai',
-  order: 'order',
-  reporting: 'reporting',
-  student: 'students',
-  'help-desk': 'helpdesk',
-  settings: 'settings',
+/** 菜单是否被账号级功能键允许（null = 不额外限制）。 */
+export function menuFeatureAllowed(
+  menu: MenuKey,
+  features: AccountFeatures,
+): boolean {
+  return features === null || MENU_FEATURE_KEYS[menu].some((key) => features.has(key))
 }
 
-export function capabilityForSegments(
+/** 侧栏菜单再 ∩ 账号生效功能（任务口径：角色 ∩ 环境能力 ∩ 账号 module.*）。 */
+export function filterMenusByFeatures(
+  menus: readonly MenuKey[],
+  features: AccountFeatures,
+): MenuKey[] {
+  return menus.filter((menu) => menuFeatureAllowed(menu, features))
+}
+
+/**
+ * 菜单候选集：
+ * - 旧服务端（features 缺失）= 角色可见菜单（行为不变）；
+ * - features 已返回 = 以服务端 effective 为准 —— 它已包含环境 ∩ 角色 ± 账号开关，
+ *   账号「允许」可以把角色 NONE 的模块加回来（owner：可加可减），「禁止」可以收紧角色权限。
+ */
+export function accountMenus(
+  roleMenus: readonly MenuKey[],
+  features: AccountFeatures,
+): readonly MenuKey[] {
+  return features === null
+    ? roleMenus
+    : MENU_ORDER.filter((menu) => menuFeatureAllowed(menu, features))
+}
+
+/** 路由第一段 → 环境能力（任一启用即放行）；settings 子项按 accounts / settings 拆分。 */
+const SEGMENT_CAPABILITIES: Record<string, readonly CapabilityId[]> = {
+  course: ['course'],
+  operations: ['operations'],
+  knowledge: ['knowledge'],
+  'ai-tutor': ['ai'],
+  order: ['order'],
+  reporting: ['reporting'],
+  student: ['students'],
+  'help-desk': ['helpdesk'],
+}
+
+export function capabilitiesForSegments(
   segments: readonly string[] | undefined,
-): CapabilityId | null {
+): readonly CapabilityId[] | null {
   if (!segments || segments.length === 0) return null
-  return SEGMENT_CAPABILITY[segments[0]] ?? null
+  const [first, second] = segments
+  if (first === 'settings') {
+    // /settings 与员工账号子页：accounts 能力即可；其它 Settings 子项仍要 settings
+    return second === undefined || second === 'employee-account'
+      ? ['settings', 'accounts']
+      : ['settings']
+  }
+  return SEGMENT_CAPABILITIES[first] ?? null
 }
 
-/** 被禁用路由的落点：角色可见且能力启用的第一个菜单（通常是 course）；没有则 null（显示“无可用模块”）。 */
+/** 路由第一段 → 账号功能键（任一命中即放行）；未登记（含 Shell 之外） = null，不做账号级重定向。 */
+const SEGMENT_FEATURE_KEYS: Record<string, readonly string[]> = {
+  course: ['module.course'],
+  operations: ['module.operations'],
+  knowledge: ['module.knowledge'],
+  'ai-tutor': ['module.ai'],
+  order: ['module.order'],
+  reporting: ['module.reporting'],
+  student: ['module.students'],
+  'help-desk': ['module.helpdesk'],
+}
+
+export function featureKeysForSegments(
+  segments: readonly string[] | undefined,
+): readonly string[] | null {
+  if (!segments || segments.length === 0) return null
+  const [first, second] = segments
+  if (first === 'settings') {
+    if (second === 'employee-account') return ['module.accounts']
+    if (second === undefined) return ['module.settings', 'module.accounts']
+    return ['module.settings']
+  }
+  return SEGMENT_FEATURE_KEYS[first] ?? null
+}
+
+/** 被禁用路由的落点：角色可见、能力启用且账号功能允许的第一个菜单；没有则 null。 */
 export function landingMenuFor(
   menus: readonly MenuKey[],
   enabled: ReadonlySet<CapabilityId>,
+  features: AccountFeatures = null,
 ): MenuKey | null {
-  return menus.find((menu) => enabled.has(MENU_CAPABILITY[menu])) ?? null
+  return (
+    menus.find(
+      (menu) =>
+        MENU_CAPABILITY[menu].some((id) => enabled.has(id)) &&
+        menuFeatureAllowed(menu, features),
+    ) ?? null
+  )
 }

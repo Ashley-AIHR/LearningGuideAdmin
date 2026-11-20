@@ -333,6 +333,44 @@
     },
     "hintEmailLocked": "已验证的邮箱不可修改。",
     "bootstrapLocked": "受保护的管理员账号不可停用、降级或删除。",
+    "features": {
+      "title": "功能权限",
+      "subtitle": "角色提供基线；账号开关可在此基础上允许或禁止，最终生效结果以服务端为准。",
+      "loading": "正在加载功能权限…",
+      "loadFailed": "功能权限加载失败。可先保存账号，再次编辑时重试。",
+      "groups": {
+        "module": "模块",
+        "course": "课程动作"
+      },
+      "modes": {
+        "INHERIT": "继承角色",
+        "ALLOW": "允许",
+        "DENY": "禁止"
+      },
+      "effective": {
+        "on": "生效结果：允许",
+        "off": "生效结果：禁止"
+      },
+      "items": {
+        "module_course": "课程管理",
+        "module_knowledge": "知识库",
+        "module_ai": "AI 导师",
+        "module_students": "学员管理",
+        "module_helpdesk": "服务台",
+        "module_operations": "运营位",
+        "module_reporting": "报表",
+        "module_order": "订单",
+        "module_settings": "设置",
+        "module_accounts": "账号管理",
+        "course_view": "查看课程",
+        "course_edit": "编辑课程",
+        "course_create": "新建课程",
+        "course_delete": "删除课程",
+        "course_publish": "发布课程",
+        "course_import": "导入课程",
+        "course_export": "导出课程"
+      }
+    },
     "results": {
       "created": "员工已创建，激活邮件发送结果：{result}。",
       "updated": "员工信息已更新。",

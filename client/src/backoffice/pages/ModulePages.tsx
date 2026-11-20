@@ -1,6 +1,7 @@
 import { Link, Navigate } from 'react-router-dom'
 
 import { SettingsSubNav } from '../components/SettingsSubNav'
+import { cachedAccountFeatures, cachedCapabilities } from '../lib/capabilities'
 import { t } from '../lib/i18n/messages'
 import { useLocale } from '../lib/navigation'
 import {
@@ -69,19 +70,24 @@ export function PlaceholderPage({ menu }: { menu: MenuKey }) {
   )
 }
 
-/** /settings 本身没有内容，落到当前角色第一个可见子项。 */
+/** /settings 本身没有内容，落到当前角色第一个可见子项（角色 ∩ 环境能力 ∩ 账号功能）。 */
 export function SettingsIndexPage() {
   const locale = useLocale()
   const employee = useEmployee()
-  const [first] = visibleSettingsSubs(employee.role)
+  const [first] = visibleSettingsSubs(employee.role, cachedCapabilities(), cachedAccountFeatures())
   return <Navigate to={first ? settingsSubHref(locale, first) : menuHref(locale, DEFAULT_LANDING_MENU)} replace />
 }
 
 export function EmployeeAccountSettingsPage() {
   const locale = useLocale()
   const employee = useEmployee()
-  // PORT-LST-001：仅 Admin
+  // PORT-LST-001：仅 Admin；账号管理还要环境能力（settings 或 accounts）与 module.accounts 生效
   if (!canAccessEmployeeAccount(employee.role)) return <ForbiddenCard />
+  const capabilities = cachedCapabilities()
+  const accountFeatures = cachedAccountFeatures()
+  const capabilityOpen = capabilities.has('settings') || capabilities.has('accounts')
+  const featureOpen = accountFeatures === null || accountFeatures.has('module.accounts')
+  if (!capabilityOpen || !featureOpen) return <ForbiddenCard />
   return (
     <>
       <SettingsSubNav role={employee.role} />

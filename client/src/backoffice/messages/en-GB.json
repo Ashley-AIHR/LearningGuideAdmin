@@ -333,6 +333,44 @@
     },
     "hintEmailLocked": "A verified email address cannot be changed.",
     "bootstrapLocked": "The protected administrator account cannot be deactivated, demoted or deleted.",
+    "features": {
+      "title": "Feature permissions",
+      "subtitle": "The role sets the baseline. Account switches can allow or deny on top of it; the server decides each effective result.",
+      "loading": "Loading feature permissions…",
+      "loadFailed": "Feature permissions could not be loaded. You can save the account, then edit it again to retry.",
+      "groups": {
+        "module": "Modules",
+        "course": "Course actions"
+      },
+      "modes": {
+        "INHERIT": "Inherit role",
+        "ALLOW": "Allow",
+        "DENY": "Deny"
+      },
+      "effective": {
+        "on": "Effective: allowed",
+        "off": "Effective: blocked"
+      },
+      "items": {
+        "module_course": "Course",
+        "module_knowledge": "Knowledge",
+        "module_ai": "AI Tutor",
+        "module_students": "Student",
+        "module_helpdesk": "HelpDesk",
+        "module_operations": "Operations",
+        "module_reporting": "Reporting",
+        "module_order": "Order",
+        "module_settings": "Settings",
+        "module_accounts": "Account management",
+        "course_view": "View course",
+        "course_edit": "Edit course",
+        "course_create": "Create course",
+        "course_delete": "Delete course",
+        "course_publish": "Publish course",
+        "course_import": "Import course",
+        "course_export": "Export course"
+      }
+    },
     "results": {
       "created": "Employee created. Activation email delivery result: {result}.",
       "updated": "Employee updated.",

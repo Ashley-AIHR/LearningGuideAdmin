@@ -3,11 +3,16 @@ import { Navigate, Outlet } from 'react-router-dom';
 import { AppShell } from './components/AppShell';
 import { boRequest } from './lib/api';
 import {
+  accountFeaturesFromSession,
+  accountMenus,
+  capabilitiesForSegments,
   capabilitiesFromEnvironment,
-  capabilityForSegments,
+  featureKeysForSegments,
   filterMenusByCapabilities,
   landingMenuFor,
+  rememberAccountFeatures,
   rememberEnvironment,
+  type AccountFeatures,
   type CapabilityId,
   type EnvironmentResponse,
 } from './lib/capabilities';
@@ -21,7 +26,9 @@ import type { SessionPayload, SessionState } from './employeeSession';
  * 登录后外壳：服务端 /api/session 是唯一事实来源。
  * 未登录跳到登录页；会话变化（登出、改密、接口 401）时重新读取。
  * 能力集（ADMIN_CAPABILITIES）来自环境端点：菜单 = 角色权限 ∩ 已启用能力；
- * 被禁用能力的路由直接重定向到第一个可用菜单（通常 course）。
+ * 账号级功能键（/api/session 的 features，服务端 effective）再收一层：
+ * settings 由 module.settings / module.accounts 任一打开，员工账号子页只认 module.accounts。
+ * 被禁止的菜单/路由直接重定向到第一个同时满足角色、环境能力与账号功能的菜单。
  */
 export function ShellRoute() {
   const locale = useLocale()
@@ -29,6 +36,8 @@ export function ShellRoute() {
   const [state, setState] = useState<SessionState>({ kind: 'loading' })
   // null = 还在读；读完后是“全开”（字段缺失/旧服务端/读取失败）或启用子集
   const [capabilities, setCapabilities] = useState<ReadonlySet<CapabilityId> | null>(null)
+  // undefined = 会话还没回来；null = 旧服务端（不额外限制）；Set = 该账号生效的功能键
+  const [accountFeatures, setAccountFeatures] = useState<AccountFeatures | undefined>(undefined)
 
   const load = useCallback(() => {
     return boRequest<SessionPayload>('/api/session').then((result) => {
@@ -38,6 +47,9 @@ export function ShellRoute() {
           employee: result.data.employee,
           sidebarState: result.data.sidebarState === 'collapsed' ? 'collapsed' : 'expanded',
         })
+        // 账号功能键随会话一起刷新（角色/开关在别处被改后，切回标签页即生效）
+        rememberAccountFeatures(result.data)
+        setAccountFeatures(accountFeaturesFromSession(result.data))
         return
       }
       // 只有服务端明确说会话无效才登出；断网或 5xx 时保留当前页面，首次加载则提示重试
@@ -72,7 +84,7 @@ export function ShellRoute() {
     })
   }, [])
 
-  if (state.kind === 'loading' || capabilities === null) {
+  if (state.kind === 'loading' || capabilities === null || accountFeatures === undefined) {
     return <div className="shellLoading">{t(locale, 'common.loading')}</div>
   }
   if (state.kind === 'unavailable') {
@@ -91,10 +103,20 @@ export function ShellRoute() {
 
   const segments = pathname.split('/').filter(Boolean).slice(1)
   const roleMenus = visibleMenus(state.employee.role)
-  const menus = filterMenusByCapabilities(roleMenus, capabilities)
-  const required = capabilityForSegments(segments)
-  if (required !== null && !capabilities.has(required)) {
-    const landing = landingMenuFor(roleMenus, capabilities)
+  // 服务端 features 已含 环境 ∩ 角色 ± 账号开关：有 features 时以它为准（可加可减），旧服务端回退角色菜单
+  const candidateMenus = accountMenus(roleMenus, accountFeatures)
+  const menus = filterMenusByCapabilities(candidateMenus, capabilities)
+  // 路由门 = 环境能力 ∩ 账号功能：任一集合命中即放行；旧服务端（features 缺失）不额外限制
+  const requiredCapabilities = capabilitiesForSegments(segments)
+  const requiredFeatures = featureKeysForSegments(segments)
+  const missingCapability =
+    requiredCapabilities !== null && !requiredCapabilities.some((id) => capabilities.has(id))
+  const missingFeature =
+    accountFeatures !== null &&
+    requiredFeatures !== null &&
+    !requiredFeatures.some((key) => accountFeatures.has(key))
+  if (missingCapability || missingFeature) {
+    const landing = landingMenuFor(candidateMenus, capabilities, accountFeatures)
     return landing === null ? <NoModulesCard /> : <Navigate to={menuHref(locale, landing)} replace />
   }
 
