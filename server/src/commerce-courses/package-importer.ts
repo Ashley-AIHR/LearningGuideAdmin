@@ -2,7 +2,11 @@ import { Injectable, Inject } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import type { PackageManifest, PackageExhibit } from './contracts/manifest';
+import type {
+  PackageManifest,
+  PackageExhibit,
+  PackageValidationIssue,
+} from './contracts/manifest';
 import { CourseStorageService } from './storage.service';
 import { COMMERCE_CONFIG, type CommerceCourseConfig } from './commerce.config';
 import {
@@ -11,6 +15,7 @@ import {
   lessonNumber,
 } from './code-allocator';
 import { validateMediaFile } from './media-validate';
+import { mp4DurationSeconds } from './media-duration';
 import { applyVersionSnapshot, type VersionSnapshot } from './version-snapshot';
 import { HISTORY_ACTIONS } from './publishing.service';
 
@@ -51,6 +56,44 @@ interface ImportedMediaMeta {
   mimeType: string;
   size: number;
   originalName: string;
+  /** 视频文件从容器 mvhd 探测到的时长（秒）；非视频或探测失败为 null。 */
+  durationSeconds?: number | null;
+}
+
+/**
+ * 视频时长：包内声明优先；省略（或非法）时用真实文件的 mvhd 探测。
+ * 探测只支持 mp4/mov（ISO BMFF），其他容器返回 null（不猜测）。
+ */
+export function probeVideoDurationSeconds(
+  extension: string,
+  bytes: Buffer,
+): number | null {
+  if (extension !== 'mp4' && extension !== 'mov') return null;
+  const seconds = mp4DurationSeconds(bytes);
+  if (seconds === null || !Number.isFinite(seconds)) return null;
+  const rounded = Math.round(seconds);
+  return rounded > 0 ? rounded : null;
+}
+
+/** 包内 durationSeconds 合法（正数）就用它；否则用探测值（没有就是 null）。 */
+function effectiveVideoDuration(
+  declared: number | undefined,
+  probed: number | null | undefined,
+): number | null {
+  if (
+    typeof declared === 'number' &&
+    Number.isFinite(declared) &&
+    declared > 0
+  ) {
+    return Math.round(declared);
+  }
+  return probed ?? null;
+}
+
+export interface PackageImportResult {
+  courseId: string;
+  /** 导入报告里追加的 warning（例如视频时长探测失败）。 */
+  warnings: PackageValidationIssue[];
 }
 
 /**
@@ -69,7 +112,7 @@ export class PackageImporter {
     manifest: PackageManifest,
     files: Map<string, Buffer>,
     options: ImportOptions,
-  ): Promise<{ courseId: string }> {
+  ): Promise<PackageImportResult> {
     const { course } = manifest;
 
     // 冲突检测：Course ID（课程身份）与 slug（URL 标识）要分开判断。
@@ -117,9 +160,15 @@ export class PackageImporter {
     const courseId = randomUUID();
     const mediaKeyMap = new Map<string, ImportedMediaMeta>();
 
-    // 1) 媒体转存
+    // 1) 媒体转存（视频顺手按 mvhd 探测时长；探测失败只产生 warning）
+    let warnings: PackageValidationIssue[];
     try {
-      await this.transferMedia(courseId, manifest, files, mediaKeyMap);
+      warnings = await this.transferMedia(
+        courseId,
+        manifest,
+        files,
+        mediaKeyMap,
+      );
     } catch (error) {
       await this.rollbackMedia(courseId, mediaKeyMap);
       throw error;
@@ -141,7 +190,7 @@ export class PackageImporter {
       throw error;
     }
 
-    return { courseId };
+    return { courseId, warnings };
   }
 
   /**
@@ -153,7 +202,7 @@ export class PackageImporter {
     manifest: PackageManifest,
     files: Map<string, Buffer>,
     actorEmployeeId: string | null,
-  ): Promise<{ courseId: string }> {
+  ): Promise<PackageImportResult> {
     const existing = await this.prisma.commerceCourse.findUnique({
       where: { id: courseId },
       select: { id: true, code: true },
@@ -170,8 +219,14 @@ export class PackageImporter {
 
     const categoryId = await this.resolveCategory(manifest.course.category);
     const mediaKeyMap = new Map<string, ImportedMediaMeta>();
+    let warnings: PackageValidationIssue[];
     try {
-      await this.transferMedia(courseId, manifest, files, mediaKeyMap);
+      warnings = await this.transferMedia(
+        courseId,
+        manifest,
+        files,
+        mediaKeyMap,
+      );
       // 媒体资产必须先落库，applyVersionSnapshot 才能写入视频/展品外键。
       await this.createMediaRows(courseId, mediaKeyMap);
     } catch (error) {
@@ -321,7 +376,7 @@ export class PackageImporter {
           },
         });
       });
-      return { courseId };
+      return { courseId, warnings };
     } catch (error) {
       await this.rollbackMedia(courseId, mediaKeyMap);
       throw error;
@@ -385,7 +440,12 @@ export class PackageImporter {
                   videoAssetId: loc.video?.file
                     ? (mediaKeyMap.get(loc.video.file)?.assetId ?? null)
                     : null,
-                  videoDurationSeconds: loc.video?.durationSeconds ?? null,
+                  videoDurationSeconds: effectiveVideoDuration(
+                    loc.video?.durationSeconds,
+                    loc.video?.file
+                      ? mediaKeyMap.get(loc.video.file)?.durationSeconds
+                      : undefined,
+                  ),
                   textHtml: loc.text?.html ?? null,
                   textLearningPoints: loc.text?.learningPoints ?? [],
                 }),
@@ -509,7 +569,7 @@ export class PackageImporter {
     manifest: PackageManifest,
     files: Map<string, Buffer>,
     map: Map<string, ImportedMediaMeta>,
-  ): Promise<void> {
+  ): Promise<PackageValidationIssue[]> {
     const { course } = manifest;
     const store = async (relPath: string) => {
       const bytes = files.get(relPath);
@@ -532,6 +592,11 @@ export class PackageImporter {
           `Invalid media: ${relPath}`,
         );
       }
+      // 视频时长只从真实文件的容器头读取（mp4/mov 的 mvhd），不猜测其他格式。
+      const durationSeconds =
+        validated.kind === 'VIDEO'
+          ? probeVideoDurationSeconds(validated.extension, bytes)
+          : null;
       const assetId = randomUUID();
       const storageKey = this.storage.mediaKey(
         courseId,
@@ -547,6 +612,7 @@ export class PackageImporter {
         mimeType: validated.mimeType,
         size: validated.size,
         originalName: validated.originalName,
+        durationSeconds,
       });
       return { assetId, validated };
     };
@@ -561,6 +627,34 @@ export class PackageImporter {
         if (ex.thumbnail) await store(ex.thumbnail);
       }
     }
+
+    // 包内省略可选 durationSeconds 且文件里读不到时长：导入继续（时长落 null），
+    // 但在导入报告里明确 warning；该课时在补齐时长前不能发布（completeness）。
+    const warnings: PackageValidationIssue[] = [];
+    const warned = new Set<string>();
+    for (const lesson of course.lessons ?? []) {
+      for (const [language, loc] of Object.entries(lesson.localized ?? {})) {
+        const file = loc.video?.file;
+        if (!file) continue;
+        const declared = loc.video?.durationSeconds;
+        const declaredValid =
+          typeof declared === 'number' &&
+          Number.isFinite(declared) &&
+          declared > 0;
+        if (declaredValid) continue;
+        if (map.get(file)?.durationSeconds) continue;
+        const key = `${lesson.code}|${language}|${file}`;
+        if (warned.has(key)) continue;
+        warned.add(key);
+        warnings.push({
+          level: 'warning',
+          code: 'VIDEO_DURATION_UNREADABLE',
+          path: `lessons.${lesson.code}.localized.${language}.video`,
+          message: `Video duration could not be read from ${file} (${language}); the lesson cannot be published until a duration is set.`,
+        });
+      }
+    }
+    return warnings;
   }
 
   /** 导入已有课程时补齐媒体资产行；新建课程在 writeCourse 的事务内创建。 */
@@ -688,7 +782,12 @@ export class PackageImporter {
               videoAssetId: loc.video?.file
                 ? (mediaKeyMap.get(loc.video.file)?.assetId ?? null)
                 : null,
-              videoDurationSeconds: loc.video?.durationSeconds ?? null,
+              videoDurationSeconds: effectiveVideoDuration(
+                loc.video?.durationSeconds,
+                loc.video?.file
+                  ? mediaKeyMap.get(loc.video.file)?.durationSeconds
+                  : undefined,
+              ),
               textHtml: loc.text?.html ?? null,
               textLearningPoints: (loc.text?.learningPoints ??
                 []) as unknown as Prisma.InputJsonValue,
