@@ -684,11 +684,13 @@ export class CommerceCoursesController {
     return this.publishing.deleteDraft(id, actor(request));
   }
 
+  // 契约：{ status: "ONLINE"|"HIDDEN"|"OFFLINE", reason } 两项都必填；
+  // 运行时校验在 PublishingService.parseChangeStatusBody（缺/非法 400，缺 reason 409）。
   @Post(':id/live-status')
   @HttpCode(200)
   changeStatus(
     @Param('id') id: string,
-    @Body() body: { status: 'ONLINE' | 'HIDDEN' | 'OFFLINE'; reason?: string },
+    @Body() body: unknown,
     @Req() request: BackofficeRequest,
   ) {
     return this.publishing.changeStatus(id, body, actor(request));
@@ -983,10 +985,11 @@ export class CommerceCoursesController {
   @HttpCode(202)
   export(
     @Param('id') id: string,
-    @Body() body: { version?: string },
+    @Body()
+    body: { version?: string; versionId?: string; sourceVersion?: string },
     @Req() request: BackofficeRequest,
   ) {
-    return wrap(() => this.jobs.startExport(id, actor(request), body?.version));
+    return wrap(() => this.jobs.startExport(id, actor(request), body ?? {}));
   }
 
   @Get('export/:jobId')
