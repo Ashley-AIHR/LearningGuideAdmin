@@ -1050,6 +1050,9 @@ model CommerceCourse {
   authors       CommerceCourseAuthor[]
   plans         CoursePlan[]
   ksCourse      Course?
+  exhibits      Exhibit[]
+  knowledgeQuestions KnowledgeQuestion[]
+  applicationTests   ApplicationTest[]
 
   @@index([lifecycleStatus, updatedAt])
   @@index([liveStatus])
@@ -1086,7 +1089,7 @@ model Lesson {
   exhibits        Exhibit[]
   readings        RecommendedReading[]
   questions       KnowledgeQuestion[]
-  applicationTest ApplicationTest?
+  applicationTests ApplicationTest[]
   learningPoints  LearningPoint[]
   triggers        ExhibitTrigger[]
 
@@ -1107,6 +1110,9 @@ model LessonLocalization {
   textHtml             String?          @db.Text
   textLearningPoints   Json?
   legacyContents       Json?
+  /// 测试开关按 Content language 分别保存（PRD L421-L433）；关掉只是隐藏，题目保留
+  knowledgeTestEnabled   Boolean        @default(false)
+  applicationTestEnabled Boolean        @default(false)
 
   @@unique([lessonId, language])
 }
@@ -1115,7 +1121,12 @@ model Exhibit {
   id               String           @id @default(uuid())
   lessonId         String
   lesson           Lesson           @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  /// 展品 ID 在 Course 内唯一（PRD L136）；由 CourseCodeCounter 分配，删除后不复用
+  courseId         String
+  course           CommerceCourse   @relation(fields: [courseId], references: [id], onDelete: Cascade)
   code             String
+  /// 同一课时内的展示顺序（拖拽排序）
+  sortOrder        Int              @default(0)
   type             ExhibitType
   mediaAssetId     String?
   media            CourseMediaAsset? @relation("ExhibitMedia", fields: [mediaAssetId], references: [id])
@@ -1126,7 +1137,11 @@ model Exhibit {
   createdAt        DateTime         @default(now())
   updatedAt        DateTime         @updatedAt
 
+  triggers ExhibitTrigger[]
+
   @@unique([lessonId, code])
+  @@unique([courseId, code])
+  @@index([lessonId, sortOrder])
 }
 
 model LearningPoint {
@@ -1148,11 +1163,16 @@ model ExhibitTrigger {
   id          String @id @default(uuid())
   lessonId    String
   lesson      Lesson @relation(fields: [lessonId], references: [id], onDelete: Cascade)
-  exhibitId   String
+  /// null = 还没选展品（没填完也可以保存，完整性规则报告 "Choose an exhibit"）
+  exhibitId   String?
+  exhibit     Exhibit? @relation(fields: [exhibitId], references: [id], onDelete: SetNull)
   language    String
-  timeSeconds Int
+  /// null = 还没填时间点
+  timeSeconds Int?
+  sortOrder   Int      @default(0)
 
-  @@unique([lessonId, exhibitId, language])
+  /// 同一展品可在多个时间点触发；NULL 值互不相同，所以未填的行不互相冲突
+  @@unique([lessonId, language, exhibitId, timeSeconds])
 }
 
 model RecommendedReading {
@@ -1170,25 +1190,39 @@ model RecommendedReading {
 }
 
 model KnowledgeQuestion {
-  id              String  @id @default(uuid())
+  id              String         @id @default(uuid())
   lessonId        String
-  lesson          Lesson  @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  lesson          Lesson         @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  /// 题目 ID 在 Course 内唯一（PRD L137，形如 K-0201）；见 code-allocator.ts
+  courseId        String
+  course          CommerceCourse @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  /// 题目属于哪种 Content language（PRD L421：内容跟随 Content language）
+  language        String
   code            String
-  question        String  @db.Text
-  referenceAnswer String? @db.Text
+  question        String         @db.Text
+  referenceAnswer String?        @db.Text
   sortOrder       Int
-  enabled         Boolean @default(true)
+  enabled         Boolean        @default(true)
 
-  @@unique([lessonId, code])
+  @@unique([courseId, code])
+  @@index([lessonId, language, sortOrder])
 }
 
 model ApplicationTest {
-  id              String  @id @default(uuid())
-  lessonId        String  @unique
-  lesson          Lesson  @relation(fields: [lessonId], references: [id], onDelete: Cascade)
-  scenario        String  @db.Text
-  referenceAnswer String? @db.Text
-  enabled         Boolean @default(true)
+  id              String         @id @default(uuid())
+  lessonId        String
+  lesson          Lesson         @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  courseId        String
+  course          CommerceCourse @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  language        String
+  /// Course 内唯一（PRD L138，形如 A-0201）
+  code            String
+  scenario        String         @db.Text
+  referenceAnswer String?        @db.Text
+  enabled         Boolean        @default(true)
+
+  @@unique([lessonId, language])
+  @@unique([courseId, code])
 }
 
 model TrialSetting {
@@ -1204,10 +1238,23 @@ model TrialSetting {
   // Re-confirm 判定基线：确认时所在课时的视频与文本截止点
   confirmedVideoAssetId     String?
   confirmedTextCutoffCode   String?
+  /// 试看按学习语言保存（PRD L460-L472）：只有"最后一个试看课时"那一行有值。
+  /// { "<language>": { "videoSeconds": 120, "textLpCode": "T2" } }，文本截止点按学习点编号（跨 Save / Restore 稳定）
+  cutoffs                   Json?
+  /// Re-confirm 判定基线（每个学习语言）：
+  /// { "<language>": { "videoAssetId": "...", "textLpCode": "T2", "textIndex": 2 } }，textIndex 从 1 起
+  confirmed                 Json?
   status                    TrialRowStatus @default(LOCKED)
   updatedAt                 DateTime       @updatedAt
 
   @@unique([courseId, lessonId])
+}
+
+/// 所有给人看的编号的计数器（见 code-allocator.ts）：只增不减，删除后的编号不再发放。
+/// key 例：course、lesson:<courseId>、exhibit:<courseId>、knowledge:<lessonId>、lp:<lessonId>:<language>:V
+model CourseCodeCounter {
+  key  String @id
+  next Int
 }
 
 model CourseVersion {
@@ -1245,10 +1292,16 @@ model CourseMediaAsset {
   size         Int
   storageKey   String          @unique
   checksum     String?
+  /// 图片像素尺寸（上传时读取）；视频时长秒数；文件缺失或损坏的标记（media/check）
+  width           Int?
+  height          Int?
+  durationSeconds Int?
+  brokenAt        DateTime?
+  brokenReason    String?
   createdBy    String?
   createdAt    DateTime        @default(now())
 
-  coverFor         CommerceCourse?    @relation("CourseCover")
+  coverFor        CommerceCourse?    @relation("CourseCover")
   exhibitMedia     Exhibit[]          @relation("ExhibitMedia")
   exhibitThumbnail Exhibit[]          @relation("ExhibitThumbnail")
   lessonVideos     LessonLocalization[] @relation("LessonVideo")
@@ -1258,7 +1311,11 @@ model CourseMediaAsset {
 
 model CourseCatalogueEntry {
   id          String                 @id @default(uuid())
+  /// 稳定键（导入按它匹配，不随界面语言变化）。
   name        String
+  /// 各语言显示名（通用多语言模板，见 server/src/common/i18n/localized.ts）：
+  /// {"en-GB":{"name":"Society"},"zh-CN":{"name":"社会"}}；某语言没有时按模板规则回退。
+  localized   Json                   @default("{}")
   description String                 @default("")
   parentId    String?
   parent      CourseCatalogueEntry?  @relation("CatalogueParent", fields: [parentId], references: [id])
