@@ -14,7 +14,7 @@
 | PPE | 预生产 | `production` → `Version N` | 正式（仅批准后） | import-only（目标态） | 存在 |
 | **Sandbox（新建）** | 内容验证：Operator 在 Admin 创作/导出，客户在 Course Sandbox 前台测试 | `sandbox` → `X.Y` | 测试（`sk_test_…`） | **authoring 全开**（能力分区：只开课程管理与导入导出） | 未建；本分支已提供 Admin 侧 provision/部署模板与申请/验收文档；Portal 侧代码前置（D3/D10/G6/G7）已在 Portal 工作区实现，待提交/部署验证 |
 
-> 编号说明：`VERSION_NUMBERING_MODE` 是 Admin 独有配置（`server/src/commerce-courses/commerce.config.ts`），缺省即 `sandbox`。本分支起，`scripts/provision-admin-dev.mjs` 在 `ADMIN_ENV=sandbox` 时**显式写入** `VERSION_NUMBERING_MODE=sandbox`、`ENVIRONMENT_LABEL=Sandbox`、`APP_ROLES=admin`、`ADMIN_CAPABILITIES=course`（dev/sit/uat 保持历史行为，不写这些变量）。因此 **UAT Admin 若未显式设 `VERSION_NUMBERING_MODE=production`，页头徽标与版本号会显示 Sandbox 语义**（D1）；`server/.env.example` 已补该变量说明（本分支）。
+> 编号说明：`VERSION_NUMBERING_MODE` 是 Admin 独有配置（`server/src/commerce-courses/commerce.config.ts`），缺省即 `sandbox`。本分支起，`scripts/provision-admin-dev.mjs` 在 `ADMIN_ENV=sandbox` 时**显式写入** `VERSION_NUMBERING_MODE=sandbox`、`ENVIRONMENT_LABEL=Sandbox`、`APP_ROLES=admin`、`ADMIN_CAPABILITIES=course,accounts`（dev/sit/uat 保持历史行为，不写这些变量）。因此 **UAT Admin 若未显式设 `VERSION_NUMBERING_MODE=production`，页头徽标与版本号会显示 Sandbox 语义**（D1）；`server/.env.example` 已补该变量说明（本分支）。
 
 ## 2. 逻辑分区（六维）与命名命名空间
 
@@ -65,7 +65,7 @@
 | `VERSION_NUMBERING_MODE` | 脚本未设置 → 默认 `sandbox`；UAT 需显式 `production` | `sandbox`（provision 脚本显式写入） | `commerce.config.ts:46-56`；`server/.env.example`（本分支补说明）；`provision-admin-dev.mjs`（本分支 F3b） |
 | `AUTH_ENABLED` / `AUTH_TOKEN` | 脚本写入 `AUTH_ENABLED`（缺省 false）；`AUTH_TOKEN` ← `admin_api_key` secret ARN | 强制 `AUTH_ENABLED=true` + `AUTH_TOKEN` ← `admin_api_key` ARN | `scripts/provision-admin-dev.mjs`（本分支）；`server/src/common/guards/api-key.guard.ts` |
 | `APP_ROLES` | 不设 = admin,agent,ks 全起 | `admin`（能力分区；provision 脚本显式写入） | `server/src/main.ts:65-66`、`app-roles.ts`；`provision-admin-dev.mjs`（本分支 F3b） |
-| `ADMIN_CAPABILITIES` | 不设 = 全部能力（dev/sit/uat/prod 行为不变） | `course`（只开课程管理；provision 脚本显式写入） | `server/src/common/capabilities.ts`；`provision-admin-dev.mjs`（本分支 F3b） |
+| `ADMIN_CAPABILITIES` | 不设 = 全部能力（dev/sit/uat/prod 行为不变） | `course,accounts`（课程管理 + 员工账号管理；provision 脚本显式写入） | `server/src/common/capabilities.ts`；`provision-admin-dev.mjs`（本分支 F3b） |
 | 数据库 | `learning-guide-admin-<env>`；PostgreSQL 16.13；pgvector | `learning-guide-admin-sandbox`；同版本 + pgvector；备份 7 天 | `provision-admin-dev.mjs`（sandbox 备份 7 天，本分支） |
 | 课程存储 | DEV 桶 `learning-guide-admin-dev-course-851987565851` | `learning-guide-admin-sandbox-course-<账号>`（ops 预建） | `provision-admin-dev.mjs`（`-sandbox-` 命名空间，本分支） |
 | App Runner 自动部署 | 分支自动部署（脚本 `AutoDeploymentsEnabled=true`） | **关闭**，由 sandbox 部署工作流发布 | `provision-admin-dev.mjs`（本分支） |
@@ -108,7 +108,7 @@
 | 域名/Cookie | `sandbox.*` / `admin.sandbox.*` | 会话 Cookie 不在其它域生效（host-only） |
 | Stripe | 测试账号 + 独立 webhook | Checkout `livemode=false`；无 `sk_live_` |
 | 内容通道 | 只允许 Sandbox → Production 的课程包 | 反向/跨环境导入被拒（Part C 接线并开 `on` 后） |
-| 能力分区 | Admin 只起 `admin` 角色，且 `ADMIN_CAPABILITIES=course` | 非课程模块 API 404 `MODULE_NOT_ENABLED` + 菜单隐藏；Helpdesk/AI 变量未配置 |
+| 能力分区 | Admin 只起 `admin` 角色，且 `ADMIN_CAPABILITIES=course,accounts` | 非课程模块 API 404 `MODULE_NOT_ENABLED` + 菜单隐藏；Helpdesk/AI 变量未配置 |
 
 ## 8. 目标流程（能力/来源开关启用后）
 

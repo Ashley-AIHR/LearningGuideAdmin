@@ -395,11 +395,11 @@ WORKING --publishToUat--> IN_UAT --approve--> APPROVED --goLive--> LIVE(新版�
 | `GET` | `/api/backoffice/courses/import/:jobId` | 作业状态/进度/校验报告 |
 | `POST` | `/api/backoffice/courses/import/:jobId/confirm` | 校验通过后确认导入（选择冲突策略/目标状态） |
 | `POST` | `/api/backoffice/courses/import/:jobId/cancel` | 取消并清理 |
-| `POST` | `/api/backoffice/courses/:id/export` | 创建导出作业（`version=working\|live\|version:N`） |
+| `POST` | `/api/backoffice/courses/:id/export` | 创建导出作业（**仅当前线上版本**） |
 | `GET` | `/api/backoffice/courses/export/:jobId` | 导出状态 |
 | `GET` | `/api/backoffice/courses/export/:jobId/download` | 下载生成的 ZIP（支持 `Range`） |
 
-> 导出请求体的实现现状（2026-11）：`version=working|live|version:N`，其中 `N` 按版本号（`versionNo`，如 `version:1`）或版本标签（如 `version:1.2`）解析；同时兼容既有 `versionId`（快照 UUID）与 `sourceVersion`（与 `version` 同语法）。解析不到版本返回 `404 PACKAGE_VERSION_NOT_FOUND`。
+> 导出实现现状（2026-11-20，PRD §16.2 为准）：只导出**当前线上版本**；`working`/`draft`/`version:N`/`versionId`/`sourceVersion` 等选择器已移除，传入返回 `400 VALIDATION_ERROR`。导出前必须通过发布完整性校验（三步完整）；未发布或不完整时 4xx。
 
 **请求示例（导入）：**
 
@@ -529,8 +529,8 @@ flowchart TD
 
 ### 5.6 导出流程
 
-- `POST .../export` → 作业；读取课程快照（`working` 直接读当前，`live` 读 `liveVersionId` 的 `snapshotData`，`version:N` 读对应版本）。
-- `version:N` 的 `N` 先按 `versionNo`（纯数字）解析，解析不到再按 `versionLabel` 原样匹配；`live` 走与默认导出相同的发布校验（未发布/不完整时 4xx），不会把 `live` 当成版本标签查表。
+- `POST .../export` → 作业；只读取**当前线上版本**的快照（`liveVersionId` 的 `snapshotData`），先通过发布完整性校验（未发布/不完整时 4xx）。
+- 不再支持 `working`/`version:N`/`versionId`/`sourceVersion` 选择器（PRD §16.2）；传非线上选择器返回 `400 VALIDATION_ERROR`。
 - 生成 `manifest.json` → 打包媒体（从私有存储流式读取）→ 生成 `checksums.sha256` → 输出 ZIP 到 staging → `READY`，提供带一次性下载令牌的下载链接。
 - 导出默认**不含**运营位、员工/审计、内部 ID（只含 `code` 与相对路径）。
 - 媒体缺失时导出失败并列出缺失项（不允许生成"坏包"）。

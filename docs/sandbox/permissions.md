@@ -11,7 +11,7 @@
 | 2 | 默认单管理员（bootstrap 轮换）；需要多人时由 Admin 在 Employee Account 建号。系统支持多员工、多会话并发，无席位限制。 |
 | 3 | 账号级功能开关：生效权限 = 环境能力 ∩（角色基线 ± 账号开关）；**环境能力永远优先、一票否决**。 |
 | 4 | Sandbox 环境能力：`ADMIN_CAPABILITIES=course,accounts`；`accounts` 只开员工账号管理，不打开其它 Settings。 |
-| 5 | 发布/导出默认仅 ADMIN；可按账号单独开通 `course.publish` / `course.export`；导入用 `course.import`。 |
+| 5 | 发布/导出按角色矩阵（ADMIN 与 OPERATION_ADMIN 的 course=FULL；其余默认无），可按账号单独开通 `course.publish` / `course.export`；导入用 `course.import`；新建/删除只按角色矩阵（不开放账号级开关）。 |
 | 6 | 最后管理员保护、停用即吊销会话、feature 变更审计、预览令牌 10 分钟且只读。 |
 
 ## 1. 账号边界：Sandbox 只允许 BackOffice 员工账号
@@ -70,7 +70,7 @@
 
 - 环境能力永远优先：`ADMIN_CAPABILITIES` 未启用的模块，账号开关不能打开——菜单隐藏、API 404 `MODULE_NOT_ENABLED`。
 - 例外（硬规则）：Employee Account 管理（`/api/admin/employees/**`）只认 **ADMIN 角色**（§3.3），账号开关不可越级授予。
-- UI 形态：Employee Account 列表新增「功能权限」列/抽屉——上半区只读展示角色基线，下半区逐项开关（继承/允许/禁止）；仅 ADMIN 可见；保存即审计。
+- UI 形态：Employee Account 编辑弹窗内的「功能权限」区，逐项三态开关（继承/允许/禁止）；始终以服务端 `effective` 徽标为准，INHERIT 行同时显示只读角色基线（模块级别或动作允许/禁止）；仅 ADMIN 可见；保存即审计。
 
 | 层级 | 决定者 | 示例 | 优先级 |
 |---|---|---|---|
@@ -96,8 +96,9 @@
 | `course.import` | 导入课程包（整包新建或覆盖）与导入作业状态 | IMPORT | 仅 `ADMIN`；按账号开通 |
 | `course.export` | 导出课程包、导出作业状态与下载 | EXPORT | 仅 `ADMIN`；按账号开通 |
 | `course.publish` | 发布/上下线/恢复/删除草稿 | PUBLISH | 仅 `ADMIN`；按账号开通 |
+| `course.create` / `course.delete`（已移除） | 新建课程 / 删除课程 | CREATE / DELETE | **仅角色矩阵**（FULL 角色）；2026-11-20 F3 收口：不再作为账号级开关，存量 grant 行读取时忽略 |
 
-> 说明（2026-11-20 已落地）：`backofficeCourseAction` 把 import/export/publish 拆成独立动作；**GET 作业状态与下载同样受 IMPORT/EXPORT 约束**（不能凭 VIEW 下载导出包）。账号级开关在角色基线上可加可减，环境能力始终优先（Sandbox 下非 course/accounts 模块一律拒绝）。新建/删除课程的开关仍仅 ADMIN。
+> 说明（2026-11-20 已落地）：`backofficeCourseAction` 把 import/export/publish 拆成独立动作；**GET 作业状态与下载同样受 IMPORT/EXPORT 约束**（不能凭 VIEW 下载导出包）。账号级开关在角色基线上可加可减，环境能力始终优先（Sandbox 下非 course/accounts 模块一律拒绝）。`course.create`/`course.delete` 已从账号级功能目录移除：新建/删除只由角色矩阵控制，存量 grant 行按未知 key 忽略（幂等），PUT 拒绝写入这两个 key。
 
 ## 4. 环境能力：Sandbox = `course` + `accounts`
 
@@ -118,8 +119,8 @@
 
 - 能力表已有 `accounts`；`/api/admin/employees/**` 归 `accounts`，其余 `admin` 路由仍归 `settings`；capability-gate e2e 证明 `course,accounts` 可用。
 - 账号级功能开关已实现：`employee_feature_grants` 表 + GET/PUT `/api/admin/employees/:id/features`，审计事件 `EMPLOYEE_FEATURES_CHANGED`（before/after）；`EMPLOYEE_FEATURES_CHANGED` 与既有 `employee_created` 等小写事件并存。
-- 最后管理员保护：功能权限 API 内已禁止把最后一个可用 Admin 的 accounts 关闭/自我锁死；**角色/状态降级路径的最后管理员缺口仍在**（待后续加固）。
-- Sandbox 模板仍为 `ADMIN_CAPABILITIES=course` → 账号管理不可用；需把 env 改为 `course,accounts`（见文末）。
+- 最后管理员保护：功能权限 API 内已禁止把最后一个可用 Admin 的 accounts 关闭/自我锁死；角色/状态降级路径也在同一事务 + advisory lock 内校验（含自我降级/停用），features 并发保存已串行化。
+- Sandbox 模板已是 `ADMIN_CAPABILITIES=course,accounts`；`/api/admin/employees/**` 可用。
 
 **开启 `accounts` 后的最小权限与审计要求**
 
@@ -135,7 +136,7 @@
 
 | 控制 | 规则 | 落点/证据 |
 |---|---|---|
-| 最后管理员保护 | `is_bootstrap_admin` 行不可删除/停用/降级/清标记（DB 触发器兜底），服务层返回 `PROTECTED_ADMIN_ACCOUNT`；功能权限 API 内已实现「最后一个可用 Admin 不可关闭 accounts/自我锁死」；角色/状态降级路径的最后管理员校验仍待加固 | `server/prisma/migrations/20261023150000_backoffice_employees` 的 `guard_bootstrap_admin`；`employeeAccount.ts` |
+| 最后管理员保护 | `is_bootstrap_admin` 行不可删除/停用/降级/清标记（DB 触发器兜底），服务层返回 `PROTECTED_ADMIN_ACCOUNT`；功能权限 API 与角色/状态变更均在同一事务 + advisory lock 内校验「最后一个可用 Admin」，并发互降/并发关开关不会留下 0 个管理员 | `server/prisma/migrations/20261023150000_backoffice_employees` 的 `guard_bootstrap_admin`；`employeeAccount.ts`；`featureGrantRepository.ts`；`adminGuard.ts` |
 | 停用即吊销会话 | 状态改 INACTIVE 时 `revokeAllForEmployee` 吊销全部会话；`resolveSession` 每次请求二次校验账号状态/验证状态，不满足立即吊销（BR-PORT-013） | `sessionRepository.ts`、`session.ts` |
 | Feature 变更审计 | 新增事件 `EMPLOYEE_FEATURES_CHANGED`（action=UPDATE_EMPLOYEE；old/new 为功能键差异；actor/target/IP/requestId 沿用 `audit_events`）；角色变更/停用既有事件保留；不写密码/令牌（§11.3） | `auditRepository.ts`（已实现） |
 | 预览令牌 | HMAC 签名，TTL **10 分钟**；只挂 GET（生成链接/内容/封面/媒体），不产生写操作；过期或篡改 401 `INVALID_PREVIEW_TOKEN`；预览页仍需员工会话，按角色/能力判定查看权限 | `portal-preview.service.ts`（`DEFAULT_TTL_SECONDS=600`） |
@@ -164,11 +165,12 @@
 | D-PERM-02 | 2026-11-20 | 默认单管理员（bootstrap 轮换）；多人由 Admin 在 Employee Account 建号 | 轮换已实现（QA 3.1.1）；沙箱默认单管理员 |
 | D-PERM-03 | 2026-11-20 | 账号级功能开关：角色基线 ± 开关（可加可减），环境能力永远优先 | 已实现 |
 | D-PERM-04 | 2026-11-20 | publish 级动作拆为 `course.import` / `course.export` / `course.publish` 三个账号级键，映射集中维护 | 已实现（含作业状态/下载） |
-| D-PERM-05 | 2026-11-20 | Sandbox 能力集 `course,accounts`；`accounts` 独立于 `settings` | 能力已实现；env 待改 |
+| D-PERM-05 | 2026-11-20 | Sandbox 能力集 `course,accounts`；`accounts` 独立于 `settings` | 已实现（env 模板与 provision 脚本均已写入） |
 | D-PERM-06 | 2026-11-20 | Employee Account 管理仅 ADMIN，账号级开关不可越级授予 | 已实现（§3.3） |
+| D-PERM-07 | 2026-11-20 | F3：账号级功能目录移除 `course.create` / `course.delete`；新建/删除只由角色矩阵控制，存量 grant 行读取时忽略（幂等） | 已实现 |
 
 ## 待主控执行
 
-- [ ] **sandbox 分支 `deploy/sandbox.example.env`：`ADMIN_CAPABILITIES=course` → `ADMIN_CAPABILITIES=course,accounts`**；`scripts/provision-admin-dev.mjs` 的 sandbox 写入值同步。
+- [x] **sandbox 分支 `deploy/sandbox.example.env`：`ADMIN_CAPABILITIES=course,accounts`**；`scripts/provision-admin-dev.mjs` 的 sandbox 写入值已同步。
 - [x] 前置依赖：`accounts` 能力标识、`/api/admin/employees` 路由映射、客户端 `MENU_CAPABILITY` / Settings 子项 —— 已实现（本分支）。
-- [ ] 后续加固：角色/状态降级路径的最后管理员校验；features 写并发 TOCTOU。
+- [x] 后续加固：角色/状态降级路径的最后管理员校验；features 写并发 TOCTOU —— 已改为同事务 + advisory lock。

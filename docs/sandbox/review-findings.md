@@ -12,7 +12,8 @@
 > | R4 | STILL_OPEN（verify 环境 SANDBOX 未注册） | **Portal 工作区已实现**：`environments.mjs` 注册 SANDBOX 条目；待提交/部署验证 | `/Users/nihao/AI infra/LearningGuidePortal/scripts/release/environments.mjs:47-62` |
 > | R5/R14 | STILL_OPEN（critical，Part C 键作用域） | 仍开放（Admin 产品代码，超出 Sandbox 部署写域） | 见 `verify-takeover-20261116/sandbox-prep-final-review.txt` |
 > | R6/R8/R19/D24/D25 | FIXED | 维持已修复 | 见正文 2026-11-15 复核表 |
-> | R7/R9/R10/R11/R12/R13/R15/R16/R17/R18/R20/R21 | STILL_OPEN | 仍开放（Admin 产品代码，超出 Sandbox 部署写域） | 同上 |
+> | R7/R9/R10/R11/R12/R13/R15/R16/R20/R21 | STILL_OPEN | 仍开放（Admin 产品代码，超出 Sandbox 部署写域） | 同上 |
+> | R17/R18 | FIXED（2026-11-20） | 分块课程包导入（>200MB）与“仅线上版本导出”门禁已实现 | 见正文 R17/R18 |
 >
 > 最终复验报告与证据：`/Users/nihao/AI infra/verify-takeover-20261116/sandbox-prep-final-review.txt`、`sandbox-prep-final-review.json`。
 
@@ -365,8 +366,8 @@
 | R14 [critical] | 导出键未按 courseKey 命名空间 | **STILL_OPEN（critical）**：`partc-export.ts:1514-1521` lesson 的 step/obj/ev 键只含 `lessonCode`（课程局部）；仅课程级键含 courseKey（1156-1160）。与 R5 同根：lesson code（如 L001）在两门课间撞键 | Admin |
 | R15 | 导入把第一个 body 块写给所有课时 | **STILL_OPEN（high）**：`partc-import.ts:1036-1039` `compiled.align.blocks.find(blockId==='body')` 全局取第一个，`align.ts` 每课时各有一个 body 块 | Admin |
 | R16 | 环境标识静默推导无启动校验 | STILL_OPEN：`commerce.config.ts:46-56` 未变，无启动校验 | Admin |
-| R17 | >200MB 包无法导入 | **STILL_OPEN（high）**：`package-jobs.service.ts:185-189` 仍 413；分块链路 `completeRawUpload→runRawProcessing` 走 `runImportWorker('raw')`（legacy Excel 路径），产物被 v2 契约整体拒绝；新增的 `import/local` 是服务端目录导入，同样走 legacy | Admin |
-| R18 | UI 草稿导出绕过 §16.2 门禁 | STILL_OPEN：`package-jobs.service.ts:963-966` `working/draft` 仍跳过 `assertExportable` | Admin |
+| R17 | >200MB 包无法导入 | **FIXED（2026-11-20）**：新增 `POST import/package/session` + `PUT import/package/:jobId/chunk` + `POST import/package/:jobId/complete`，分块拼包后直接走课程包校验（不做 Excel 转换），上限 `PACKAGE_MAX_BYTES`（8GB）；前端 >200MB 自动走分块 | — |
+| R18 | UI 草稿导出绕过 §16.2 门禁 | **CLOSED（2026-11-20）**：产品导出路径只允许当前线上版本。服务端 `parseExportSelector` / `startExport` 对 `working` / `draft` / `version:N` / `versionId` / `sourceVersion` 一律 400 `VALIDATION_ERROR`（文案说明只能导出线上版本），不创建作业；默认与 `version=live` 仍走 `assertExportable` 的 3 步完整门禁。UI 早已移除 Working 选项。草稿导出不可用，与 PRD §16.2 对齐 | — |
 | R19 | 跨课时同名展品 code 互相覆盖 | **FIXED**：`partc-export.ts` `uniqueAssetKey`/`uniquePath`（1038-1073、1567、1582）对重复 code/路径确定性去重，不再静默丢失 | — |
 | R20 | RESTORE/IMPORT 来源标注被部分路径清空 | STILL_OPEN：`course-authoring.service.ts:973-975` touchCourse 仍清空 draftSource*，7 个调用点未变 | Admin |
 | R21 | 课程包不带试看/价格 | STILL_OPEN：`partc-export.ts` 无 trial/pricing/plan 引用，导入端也不处理 | Admin |
@@ -375,12 +376,17 @@
 | D24 | forged provenance 报错码 cast | **FIXED**：`parse.ts:144` 现直接 `new PartCError(PACKAGE_SOURCE_NOT_ALLOWED, …)`，无 cast | — |
 | D25 | base 迁移与契约不同步 | **FIXED**：后续迁移 `12100000`（orderKey 唯一键含 courseKey）、`13000000`（confidence/归属列/计数器/发布表）已补齐；残留的键作用域问题归入 R5/R14 | — |
 
-### STILL_OPEN 按严重度（18 条）
+### STILL_OPEN 按严重度（17 条）
 
 **critical（2，同根）**：R5 全局 PK + R14 课程局部键。归属 Admin。
 **high（3）**：R15 正文块覆盖、R17 >200MB 包、R16 环境静默推导。归属 Admin。
-**medium（7）**：R7 能力归类语义、R9 plans 路由、R10 fail-open、R18 草稿导出、R20 来源标注、R21 trial/pricing、R3 provision 默认值（G4）。R2 Portal。
+**medium（6）**：R7 能力归类语义、R9 plans 路由、R10 fail-open、R20 来源标注、R21 trial/pricing、R3 provision 默认值（G4）。R2 Portal。
 **low（6）**：R1（ops）、R11、R12、R13、R4（Portal）、D23（设计）。
+
+### 2026-11-20 决策记录（F3 / B2）
+
+- **R18 关闭**：owner 已确认以 PRD 为准；PRD §16.2 要求「导出的是当前线上版本……不能选择草稿或其他版本」。服务端已收口，草稿/指定版本导出不可用。
+- **F3（MEDIUM-2 收口）**：账号级功能目录移除 `course.create` / `course.delete` —— 新建/删除只由角色矩阵控制（与 `permissions.md` 一致）；存量 `employee_feature_grants` 行读取时按未知 key 忽略（幂等），PUT 拒绝这两个 key。
 
 ### 重点项最小复现（可直接安排修复验证）
 

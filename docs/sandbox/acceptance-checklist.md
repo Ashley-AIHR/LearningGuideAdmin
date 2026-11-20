@@ -64,7 +64,7 @@ node scripts/sandbox-smoke.mjs
 - 用 Operator 账号登录 `https://admin.sandbox.ilovelearningguide.com`。
 - 页头徽标为**紫色 `Sandbox`**（红色 Production 即错）。
 - 课程页发布一门课 → 版本号 `1.1`；改动后再发布 → `1.2`；导出后再发布 → `2.1`（Sandbox `X.Y` 语义）。
-- 能力分区：课程管理与导入导出可用；`/api/user/**`、`/api/ks/**` 不对外（`APP_ROLES=admin`）；Helpdesk 未配置时 `/api/helpdesk/**` 返回 503；AI Tutor 入口不产生可用的 LLM 调用（变量未配置）。`ADMIN_ENV=sandbox` 的 provision 脚本已显式写入 `APP_ROLES=admin`、`ADMIN_CAPABILITIES=course`、`ENVIRONMENT_LABEL=Sandbox`、`VERSION_NUMBERING_MODE=sandbox`（F3b）；手工部署路径需核对这四项。
+- 能力分区：课程管理与导入导出可用；`/api/user/**`、`/api/ks/**` 不对外（`APP_ROLES=admin`）；Helpdesk 未配置时 `/api/helpdesk/**` 返回 404 `MODULE_NOT_ENABLED`；AI Tutor 入口不产生可用的 LLM 调用（变量未配置）。`ADMIN_ENV=sandbox` 的 provision 脚本已显式写入 `APP_ROLES=admin`、`ADMIN_CAPABILITIES=course,accounts`、`ENVIRONMENT_LABEL=Sandbox`、`VERSION_NUMBERING_MODE=sandbox`（F3b）；手工部署路径需核对这四项。
 
 ### B2 数据库跨环境拒绝（ops）
 

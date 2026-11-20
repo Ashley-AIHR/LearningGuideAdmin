@@ -106,7 +106,7 @@ node scripts/provision-admin-dev.mjs --apply
 - `ADMIN_BRANCH` 必传（无缺省分支）；`AutoDeploymentsEnabled=false`（发布只走 `deploy/admin-sandbox-deploy.yml.template`）；
 - `AUTH_ENABLED=true` 强制校验，`RuntimeEnvironmentSecrets.AUTH_TOKEN` ← `admin_api_key` secret ARN（G11/D8）；
 - 课程桶缺省为 `learning-guide-admin-sandbox-course-<acct>`，RDS 备份保留 7 天（G12/D9）；
-- 显式写入 `APP_ROLES=admin`、`ADMIN_CAPABILITIES=course`、`ENVIRONMENT_LABEL=Sandbox`、`VERSION_NUMBERING_MODE=sandbox`（F3b；dev/sit/uat 保持历史行为）。
+- 显式写入 `APP_ROLES=admin`、`ADMIN_CAPABILITIES=course,accounts`、`ENVIRONMENT_LABEL=Sandbox`、`VERSION_NUMBERING_MODE=sandbox`（F3b；dev/sit/uat 保持历史行为）。
 - 脚本**不自建**运行时角色与课程桶：`INSTANCE_ROLE_ARN`、`COURSE_MEDIA_BUCKET`/`COURSE_PACKAGE_BUCKET` 是输入参数，需 ops 先建；Helpdesk 首期不启用时，运行时不需授权 `learning-guide/sandbox/` 下的 helpdesk 令牌。
 
 先跑不带 `--apply` 的 dry run 核对资源名（该路径只打印计划、不调用任何 AWS API）。

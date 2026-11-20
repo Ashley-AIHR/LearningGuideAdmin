@@ -99,7 +99,7 @@
 | # | 事项 | 归属 | 说明 | 验收 |
 |---|---|---|---|---|
 | S1 | `sandbox` 分支策略 | eng + product | `sandbox` 分支只允许快进到上游最近一次生产发布（UAT=当前生产）的 SHA；Sandbox 不走 DEV→SIT→UAT 链；修复合入上游 dev 后随下一次生产发布进入（§3 分支契约） | `git rev-parse sandbox` 与生产发布 SHA 一致 |
-| S2 | Admin provision 支持 sandbox | eng | **本分支已完成**：`ADMIN_ENV=sandbox`（分支必传、`AUTH_ENABLED=true` 强制、`AUTH_TOKEN` 映射、`-sandbox-` 桶名、备份 7 天、关闭自动部署；并显式写入 `APP_ROLES=admin`、`ADMIN_CAPABILITIES=course`、`ENVIRONMENT_LABEL=Sandbox`、`VERSION_NUMBERING_MODE=sandbox`）；脚本不自建运行时角色与课程桶 | dry-run 输出 sandbox 资源名与 `runtimeEnvironmentDefaults`（`ADMIN_BRANCH`/`AUTH_ENABLED` 校验生效） |
+| S2 | Admin provision 支持 sandbox | eng | **本分支已完成**：`ADMIN_ENV=sandbox`（分支必传、`AUTH_ENABLED=true` 强制、`AUTH_TOKEN` 映射、`-sandbox-` 桶名、备份 7 天、关闭自动部署；并显式写入 `APP_ROLES=admin`、`ADMIN_CAPABILITIES=course,accounts`、`ENVIRONMENT_LABEL=Sandbox`、`VERSION_NUMBERING_MODE=sandbox`）；脚本不自建运行时角色与课程桶 | dry-run 输出 sandbox 资源名与 `runtimeEnvironmentDefaults`（`ADMIN_BRANCH`/`AUTH_ENABLED` 校验生效） |
 | S3 | Portal provision sandbox | eng（Portal 仓库） | **Portal 工作区已实现**（待提交/部署验证）：`scripts/provision-uat.mjs` 参数化 sandbox tier（`PORTAL_ENV=sandbox`，G7） | `--deploy` 可创建 `learning-guide-sandbox`；证据：Portal 工作区 `scripts/provision-uat.mjs:66-111` |
 | S4 | Admin sandbox 部署工作流 | eng | **模板已提供**：`deploy/admin-sandbox-deploy.yml.template`（复制到 `.github/workflows/sandbox-deploy.yml`；手动/推送触发 + CI 门禁 + 轮询 Operation） | 发布成功且等待 `SUCCEEDED` |
 | S5 | Portal sandbox 部署工作流 | eng（Portal 仓库） | **模板已提供**：`deploy/portal-sandbox-deploy.yml.template`（复制到 Portal 仓库 `.github/workflows/sandbox-deploy.yml`）；`release/environments.mjs` 的 SANDBOX 条目（D10）已在 Portal 工作区实现（待提交/部署验证） | 同上 |
@@ -119,7 +119,7 @@
 
 ### 3.2 Admin Sandbox（App Runner 变量 / Secrets）
 
-- 普通变量：`APP_ENV=SANDBOX`、`NODE_ENV=production`、`PORT=3000`、`AWS_REGION=ap-southeast-1`、`APP_ROLES=admin`、`ADMIN_CAPABILITIES=course`、`AUTH_ENABLED=true`、`BACKOFFICE_APP_URL=https://admin.sandbox.ilovelearningguide.com`、`ENVIRONMENT_LABEL=Sandbox`、`VERSION_NUMBERING_MODE=sandbox`、`PUBLIC_SITE_URL=https://sandbox.ilovelearningguide.com`、`COURSE_MEDIA_BUCKET`、`COURSE_MEDIA_PREFIX`、`COURSE_PACKAGE_BUCKET`、`COURSE_PACKAGE_PREFIX=staging/`、`PACKAGE_SOURCE_ENFORCEMENT=off`；（可选）`SMTP_*`、`SES_FROM_EMAIL`。
+- 普通变量：`APP_ENV=SANDBOX`、`NODE_ENV=production`、`PORT=3000`、`AWS_REGION=ap-southeast-1`、`APP_ROLES=admin`、`ADMIN_CAPABILITIES=course,accounts`、`AUTH_ENABLED=true`、`BACKOFFICE_APP_URL=https://admin.sandbox.ilovelearningguide.com`、`ENVIRONMENT_LABEL=Sandbox`、`VERSION_NUMBERING_MODE=sandbox`、`PUBLIC_SITE_URL=https://sandbox.ilovelearningguide.com`、`COURSE_MEDIA_BUCKET`、`COURSE_MEDIA_PREFIX`、`COURSE_PACKAGE_BUCKET`、`COURSE_PACKAGE_PREFIX=staging/`、`PACKAGE_SOURCE_ENFORCEMENT=off`；（可选）`SMTP_*`、`SES_FROM_EMAIL`。
 - 其中 `APP_ROLES`、`ADMIN_CAPABILITIES`、`ENVIRONMENT_LABEL`、`VERSION_NUMBERING_MODE` 由 `scripts/provision-admin-dev.mjs` 在 `ADMIN_ENV=sandbox` 时自动写入（本分支 F3b）；仅手工部署路径需要人工注入。
 - Secrets：`DATABASE_URL`、`AUTH_TOKEN`（← `admin_api_key`）、`SESSION_SECRET`、`BOOTSTRAP_ADMIN_PASSWORD`、`PORTAL_PREVIEW_SECRET`、`STRIPE_SECRET_KEY`；（可选）`SMTP_PASS`、`STRIPE_WEBHOOK_SECRET`。
 - **首期不启用（不写入）**：`OPENROUTER_*`、`AI_CONFIG_ENCRYPTION_KEY`、`AI_AVAILABLE_MODELS`、`AI_RATE_LIMIT_*`、`KS_SERVICE_TOKEN`、`KS_BASE_URL`、`PORTAL_HELPDESK_*`、`ADMIN_HELPDESK_*`、`HELPDESK_*`、`ENV_CAPABILITY_ENFORCEMENT`。
@@ -201,7 +201,7 @@
 | 1.3 | 核对 S3 | 公共访问块 4 项全 true；版本化 Enabled；拒绝非 TLS |
 | 1.4 | 核对网络 | 私有子网无公网 IP；NAT/EIP/S3 Endpoint available；DB SG 只接受 App SG |
 | 1.5 | 核对 IAM | 运行时角色只读 `learning-guide/sandbox/*`、只写 sandbox 桶/前缀；IAM Policy Simulator 验证跨环境 denied |
-| 1.6 | Admin RDS + 密钥 + 课程桶（ops 先建运行时角色与桶，再跑）：<br>`ADMIN_ENV=sandbox ADMIN_BRANCH=sandbox AUTH_ENABLED=true VPC_ID=… SUBNET_IDS=… SECURITY_GROUP_ID=… GITHUB_CONNECTION_ARN=… INSTANCE_ROLE_ARN=… VPC_CONNECTOR_ARN=… COURSE_MEDIA_BUCKET=learning-guide-admin-sandbox-course-<acct> node scripts/provision-admin-dev.mjs --apply` | `learning-guide-admin-sandbox` available、私有、加密、备份 7 天；secrets ARN 存在；`AUTH_TOKEN` 映射正确；App Runner `AutoDeploymentsEnabled=false`；运行时变量含 `APP_ROLES=admin`、`ADMIN_CAPABILITIES=course`、`ENVIRONMENT_LABEL=Sandbox`、`VERSION_NUMBERING_MODE=sandbox`（F3b，脚本自动写入） |
+| 1.6 | Admin RDS + 密钥 + 课程桶（ops 先建运行时角色与桶，再跑）：<br>`ADMIN_ENV=sandbox ADMIN_BRANCH=sandbox AUTH_ENABLED=true VPC_ID=… SUBNET_IDS=… SECURITY_GROUP_ID=… GITHUB_CONNECTION_ARN=… INSTANCE_ROLE_ARN=… VPC_CONNECTOR_ARN=… COURSE_MEDIA_BUCKET=learning-guide-admin-sandbox-course-<acct> node scripts/provision-admin-dev.mjs --apply` | `learning-guide-admin-sandbox` available、私有、加密、备份 7 天；secrets ARN 存在；`AUTH_TOKEN` 映射正确；App Runner `AutoDeploymentsEnabled=false`；运行时变量含 `APP_ROLES=admin`、`ADMIN_CAPABILITIES=course,accounts`、`ENVIRONMENT_LABEL=Sandbox`、`VERSION_NUMBERING_MODE=sandbox`（F3b，脚本自动写入） |
 
 ### Phase 2 Admin Sandbox
 
