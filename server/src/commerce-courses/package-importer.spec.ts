@@ -149,3 +149,23 @@ describe('probeVideoDurationSeconds（导入时按真实文件探测）', () => 
     expect(probeVideoDurationSeconds('mp4', Buffer.alloc(0))).toBeNull();
   });
 });
+
+describe('PackageImporter — 竞态下的冲突策略错误码', () => {
+  it('确认后课程 ID 才出现时，CREATE_NEW_COURSE 返回 422 STRATEGY_UNSUPPORTED', async () => {
+    const prisma = {
+      commerceCourse: {
+        findFirst: ({ where }: { where: { code?: string } }) =>
+          Promise.resolve(where.code ? { id: 'existing', code: where.code } : null),
+      },
+    };
+    await expect(
+      importer(prisma).importPackage(manifestWith('SCI001', 'modeling-life'), new Map(), {
+        ...options,
+        onConflict: 'CREATE_NEW_COURSE',
+      }),
+    ).rejects.toMatchObject({
+      code: 'PACKAGE_CONFLICT_STRATEGY_UNSUPPORTED',
+      status: 422,
+    });
+  });
+});

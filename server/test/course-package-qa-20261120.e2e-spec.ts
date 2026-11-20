@@ -8,7 +8,7 @@ import type TestAgent from 'supertest/lib/agent';
 import { AppModule } from '../src/app.module';
 import { configureApp } from '../src/common/app-setup';
 import { PrismaService } from '../src/prisma/prisma.service';
-import { PublishingService } from '../src/commerce-courses/publishing.service';
+import { CourseStorageService } from '../src/commerce-courses/storage.service';
 import { CourseFixtures } from './helpers/course-fixture';
 import type { ErrorResponse, SuccessResponse } from './helpers/http-response';
 
@@ -481,18 +481,18 @@ describe('Course package QA fixes 2026-11-20 (e2e)', () => {
     }, 60_000);
   });
 
-  // ===== MED-2: 导出参数 =====
+  // ===== MED-2 / B2: 导出只允许当前线上版本（PRD §16.2） =====
 
-  describe('MED-2 export version selectors', () => {
-    async function waitForExport(jobId: string): Promise<void> {
+  describe('MED-2/B2 export selectors — only the current live version', () => {
+    async function waitForExport(jobId: string): Promise<JobView> {
       const deadline = Date.now() + 15_000;
       for (;;) {
         const response: SuccessResponse<JobView> = await agent
           .get(`/api/backoffice/courses/export/${jobId}`)
           .expect(200);
-        const status = response.body.data.status;
-        if (status === 'READY' || status === 'FAILED') return;
-        if (Date.now() > deadline) return;
+        const job = response.body.data;
+        if (job.status === 'READY' || job.status === 'FAILED') return job;
+        if (Date.now() > deadline) return job;
         await new Promise((resolve) => setTimeout(resolve, 50));
       }
     }
@@ -506,109 +506,210 @@ describe('Course package QA fixes 2026-11-20 (e2e)', () => {
         .send(body)
         .expect(202);
       createdJobIds.push(response.body.data.jobId);
-      await waitForExport(response.body.data.jobId);
       return response.body.data;
     }
 
-    it('resolves working/live/version:N, versionId and sourceVersion; 404 when the version does not exist', async () => {
-      const course = await fixtures.createCourse(agent, {
-        title: 'Export selectors',
+    /**
+     * 造一门三步都完整的课并真实 Publish（PRD §16.2：线上版本 3 步完整才能导出）。
+     * 课程/课时走真实 API，其余内容用 Prisma 补齐后由真实 publish 生成不可变快照；
+     * 导出断言不 mock assertExportable。
+     */
+    async function createPublishableCourse(title: string) {
+      const course = await fixtures.createCourse(agent, { title });
+      const category = await prisma.courseCatalogueEntry.findFirstOrThrow({
+        where: { name: 'Society' },
       });
-      const v1 = await prisma.courseVersion.create({
-        data: {
-          courseId: course.id,
-          versionNo: 1,
-          versionLabel: '1.1',
-          versionSeries: 1,
-          versionMinor: 1,
-          snapshotData: {},
-        },
-      });
-      const v2 = await prisma.courseVersion.create({
-        data: {
-          courseId: course.id,
-          versionNo: 2,
-          versionLabel: '1.2',
-          versionSeries: 1,
-          versionMinor: 2,
-          snapshotData: {},
-        },
-      });
-
-      // version:N —— N 按版本号解析
-      const byNo = await startExport(course.id, { version: 'version:1' });
-      expect(byNo.versionId).toBe(v1.id);
-      expect(byNo.versionLabel).toBe('1.1');
-      expect(byNo.fileName).toBe(`${course.code}_1.1.zip`);
-
-      // version:N —— N 按版本标签解析
-      const byLabel = await startExport(course.id, { version: 'version:1.2' });
-      expect(byLabel.versionId).toBe(v2.id);
-      expect(byLabel.versionLabel).toBe('1.2');
-
-      // 现有 versionId 兼容
-      const byId = await startExport(course.id, { versionId: v1.id });
-      expect(byId.versionId).toBe(v1.id);
-
-      // 现有 sourceVersion 兼容（与 version 同语法）
-      const bySourceVersion = await startExport(course.id, {
-        sourceVersion: 'version:2',
-      });
-      expect(bySourceVersion.versionId).toBe(v2.id);
-
-      // working 仍导出草稿
-      const working = await startExport(course.id, { version: 'working' });
-      expect(working.versionLabel).toBe('draft');
-      expect(working.versionId).toBeNull();
-
-      // live：没有线上版本时应走发布校验（409），而不是把 'live' 当标签查版本（404）
-      const liveMissing: ErrorResponse = await agent
-        .post(`/api/backoffice/courses/${course.id}/export`)
-        .send({ version: 'live' });
-      expect(liveMissing.status).toBe(409);
-      expect(liveMissing.body.error.code).toBe('EXPORT_REQUIRES_LIVE_VERSION');
-
-      // 解析不到版本 → 404 PACKAGE_VERSION_NOT_FOUND
-      const missingNo: ErrorResponse = await agent
-        .post(`/api/backoffice/courses/${course.id}/export`)
-        .send({ version: 'version:99' });
-      expect(missingNo.status).toBe(404);
-      expect(missingNo.body.error.code).toBe('PACKAGE_VERSION_NOT_FOUND');
-
-      const missingId: ErrorResponse = await agent
-        .post(`/api/backoffice/courses/${course.id}/export`)
-        .send({ versionId: randomUUID() });
-      expect(missingId.status).toBe(404);
-      expect(missingId.body.error.code).toBe('PACKAGE_VERSION_NOT_FOUND');
-
-      // live：有线上版本时导出 liveVersionId 指向的快照
-      await prisma.commerceCourse.update({
-        where: { id: course.id },
-        data: { liveVersionId: v1.id },
-      });
-      const publishing = app.get(PublishingService);
-      const spy = jest
-        .spyOn(publishing, 'assertExportable')
-        .mockResolvedValue({ versionId: v1.id, versionLabel: '1.1' });
-      try {
-        const live = await startExport(course.id, { version: 'live' });
-        expect(live.versionId).toBe(v1.id);
-        expect(live.versionLabel).toBe('1.1');
-
-        const defaultLive = await startExport(course.id, {});
-        expect(defaultLive.versionId).toBe(v1.id);
-
-        const legacyLive = await startExport(course.id, {
-          sourceVersion: 'live',
-        });
-        expect(legacyLive.versionId).toBe(v1.id);
-      } finally {
-        spy.mockRestore();
-        await prisma.commerceCourse.update({
-          where: { id: course.id },
-          data: { liveVersionId: null },
+      const items = ['one', 'two', 'three', 'four'];
+      for (const [language, label] of [
+        ['en-GB', title],
+        ['zh-CN', `${title}（中文）`],
+      ] as const) {
+        await prisma.courseLocalization.update({
+          where: { courseId_language: { courseId: course.id, language } },
+          data: {
+            title: label,
+            shortDescription: 'Short description',
+            overview: 'Overview',
+            whatYouLearn: items,
+            provides: items,
+          },
         });
       }
+      const coverBytes = Buffer.concat([
+        Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+        Buffer.alloc(16),
+      ]);
+      const cover = await prisma.courseMediaAsset.create({
+        data: {
+          courseId: course.id,
+          kind: 'IMAGE',
+          originalName: 'cover.png',
+          mimeType: 'image/png',
+          extension: 'png',
+          size: coverBytes.length,
+          storageKey: `e2e/${course.id}/export-cover.png`,
+        },
+      });
+      await app
+        .get(CourseStorageService)
+        .putMedia(cover.storageKey, coverBytes);
+      const videoBytes = mp4Bytes(3);
+      const video = await prisma.courseMediaAsset.create({
+        data: {
+          courseId: course.id,
+          kind: 'VIDEO',
+          originalName: 'L001-en-GB.mp4',
+          mimeType: 'video/mp4',
+          extension: 'mp4',
+          size: videoBytes.length,
+          storageKey: `e2e/${course.id}/export-video.mp4`,
+          durationSeconds: 3,
+        },
+      });
+      await app
+        .get(CourseStorageService)
+        .putMedia(video.storageKey, videoBytes);
+      await prisma.commerceCourse.update({
+        where: { id: course.id },
+        data: {
+          categoryId: category.id,
+          coverAssetId: cover.id,
+          learningMode: 'VIDEO_ONLY',
+          learningLanguages: ['en-GB'],
+          trialEnabled: false,
+        },
+      });
+      const lesson = await fixtures.createLesson(agent, course.id);
+      for (const [language, label] of [
+        ['en-GB', 'Lesson one'],
+        ['zh-CN', '第一课'],
+      ] as const) {
+        await prisma.lessonLocalization.update({
+          where: { lessonId_language: { lessonId: lesson.id, language } },
+          data: {
+            title: label,
+            description: 'Lesson description',
+            videoAssetId: video.id,
+            videoDurationSeconds: 3,
+          },
+        });
+      }
+      await prisma.learningPoint.create({
+        data: {
+          lessonId: lesson.id,
+          language: 'en-GB',
+          code: 'V1',
+          title: 'First point',
+          source: 'VIDEO',
+          timeSeconds: 1,
+          sortOrder: 0,
+        },
+      });
+      await prisma.recommendedReading.create({
+        data: {
+          lessonId: lesson.id,
+          language: 'en-GB',
+          type: 'BOOK',
+          title: 'Book',
+          author: 'Author',
+          whyRecommended: 'Why',
+          sortOrder: 0,
+        },
+      });
+      const published: SuccessResponse<{
+        versionId: string;
+        versionLabel: string;
+      }> = await agent
+        .post(`/api/backoffice/courses/${course.id}/publish`)
+        .send({})
+        .expect(200);
+      expect(published.body.data.versionLabel).toBe('1.1');
+      return course;
+    }
+
+    it('exports the current live version and rejects draft / specific-version selectors with 400', async () => {
+      const course = await createPublishableCourse('Export selectors');
+      const live = await prisma.courseVersion.findFirstOrThrow({
+        where: { courseId: course.id },
+        orderBy: { versionNo: 'desc' },
+      });
+      expect(live.versionLabel).toBe('1.1');
+
+      // 1) 草稿/指定版本选择器：400 VALIDATION_ERROR，文案说明只能导出线上版本，且不产生作业。
+      const rejected: Array<Record<string, unknown>> = [
+        { version: 'working' },
+        { version: 'draft' },
+        { version: 'version:1' },
+        { version: 'version:1.1' },
+        { versionId: live.id },
+        { sourceVersion: 'live' },
+        { sourceVersion: 'version:2' },
+      ];
+      for (const body of rejected) {
+        const before = await prisma.coursePackageJob.count({
+          where: { courseId: course.id, kind: 'EXPORT' },
+        });
+        const response: ErrorResponse = await agent
+          .post(`/api/backoffice/courses/${course.id}/export`)
+          .send(body);
+        expect(response.status).toBe(400);
+        expect(response.body.error.code).toBe('VALIDATION_ERROR');
+        expect(response.body.error.message).toContain('current live version');
+        expect(
+          await prisma.coursePackageJob.count({
+            where: { courseId: course.id, kind: 'EXPORT' },
+          }),
+        ).toBe(before);
+      }
+
+      // 2) 默认（无选择器）= 导出当前线上版本；worker 真拼包到 READY。
+      const byDefault = await startExport(course.id, {});
+      expect(byDefault.versionId).toBe(live.id);
+      expect(byDefault.versionLabel).toBe('1.1');
+      expect(byDefault.fileName).toBe(`${course.code}_1.1.zip`);
+      const defaultJob = await waitForExport(byDefault.jobId);
+      expect(defaultJob.status).toBe('READY');
+
+      // 3) 显式 live 同样只导线上版本。
+      const byLive = await startExport(course.id, { version: 'live' });
+      expect(byLive.versionId).toBe(live.id);
+      expect(byLive.versionLabel).toBe('1.1');
+      expect((await waitForExport(byLive.jobId)).status).toBe('READY');
+
+      // 4) 未发布：assertExportable 仍然拦截（409 EXPORT_REQUIRES_LIVE_VERSION）。
+      await prisma.commerceCourse.update({
+        where: { id: course.id },
+        data: { liveVersionId: null },
+      });
+      const unpublished: ErrorResponse = await agent
+        .post(`/api/backoffice/courses/${course.id}/export`)
+        .send({});
+      expect(unpublished.status).toBe(409);
+      expect(unpublished.body.error.code).toBe('EXPORT_REQUIRES_LIVE_VERSION');
+
+      // 5) 线上版本 3 步不完整：409 VERSION_INCOMPLETE（导出仍走完整 assertExportable）。
+      const snapshot = live.snapshotData as {
+        course: { learningLanguages: string[] };
+      };
+      await prisma.courseVersion.update({
+        where: { id: live.id },
+        data: {
+          snapshotData: {
+            ...snapshot,
+            course: { ...snapshot.course, learningLanguages: [] },
+          },
+        },
+      });
+      await prisma.commerceCourse.update({
+        where: { id: course.id },
+        data: { liveVersionId: live.id },
+      });
+      const incomplete: ErrorResponse = await agent
+        .post(`/api/backoffice/courses/${course.id}/export`)
+        .send({});
+      expect(incomplete.status).toBe(409);
+      expect(incomplete.body.error.code).toBe('VERSION_INCOMPLETE');
+      expect(incomplete.body.error.message).toContain('Complete all 3 steps');
     }, 60_000);
   });
 
@@ -690,6 +791,55 @@ describe('Course package QA fixes 2026-11-20 (e2e)', () => {
 
       // 原始素材直传超过 PACKAGE_MAX_BYTES 的文案走同一套 formatBytes；内存里造不出
       // 8GB 文件，这里只断言 1MB 直传包不再落到"15MB 限制"文案。
+    }, 60_000);
+
+    it('imports a package through the chunked package session (no Excel conversion)', async () => {
+      const suffix = randomUUID().slice(0, 8);
+      const code = `E2E-CHUNK-${suffix.toUpperCase()}`;
+      const zip = await zipPackage(
+        packageManifest({
+          code,
+          slug: `e2e-chunk-${suffix}`,
+          includeDuration: true,
+        }),
+      );
+      const session = await agent
+        .post('/api/backoffice/courses/import/package/session')
+        .send({ fileName: 'chunked.lgcourse.zip', bytesTotal: zip.length });
+      expect(session.status).toBe(200);
+      const jobId = session.body.data.jobId as string;
+      createdJobIds.push(jobId);
+
+      const chunk = await agent
+        .put(`/api/backoffice/courses/import/package/${jobId}/chunk?index=0`)
+        .attach('chunk', zip, 'chunk.bin');
+      expect(chunk.status).toBe(200);
+
+      const complete = await agent
+        .post(`/api/backoffice/courses/import/package/${jobId}/complete`)
+        .expect(200);
+      expect(complete.body.data.stage).toMatch(/PACKAGE_QUEUED|VALIDATING/);
+
+      let status = complete.body.data as JobView;
+      for (
+        let attempt = 0;
+        attempt < 100 &&
+        status.status !== 'AWAITING_CONFIRM' &&
+        status.status !== 'FAILED';
+        attempt++
+      ) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        const polled: SuccessResponse<JobView> = await agent
+          .get(`/api/backoffice/courses/import/${jobId}`)
+          .expect(200);
+        status = polled.body.data;
+      }
+      expect(status.status).toBe('AWAITING_CONFIRM');
+      expect(status.report.errors).toEqual([]);
+
+      const confirmed = await confirm(jobId, { onConflict: 'ABORT' });
+      expect(confirmed.status).toBe(200);
+      fixtures.track(confirmed.body.data?.courseId as string);
     }, 60_000);
   });
 });

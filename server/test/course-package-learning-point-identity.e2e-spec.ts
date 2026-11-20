@@ -9,6 +9,7 @@ import type TestAgent from 'supertest/lib/agent';
 import { AppModule } from '../src/app.module';
 import { configureApp } from '../src/common/app-setup';
 import { PrismaService } from '../src/prisma/prisma.service';
+import { CourseStorageService } from '../src/commerce-courses/storage.service';
 import { CourseFixtures } from './helpers/course-fixture';
 import type { SuccessResponse } from './helpers/http-response';
 
@@ -208,6 +209,94 @@ describe('Course package learning-point identity (e2e)', () => {
     }
   }
 
+  /**
+   * 导入的包只带 en-GB 信息和视频，先补齐 Publish/Export 三步门禁要求的内容
+   * （封面、双语课程/课时信息、延伸阅读），然后由真实 Publish 生成线上版本快照。
+   * PRD §16.2：导出只导当前线上版本，测试不能再走草稿导出。
+   */
+  async function completeCourseForPublish(courseId: string): Promise<void> {
+    const items = ['one', 'two', 'three', 'four'];
+    for (const [language, title] of [
+      ['en-GB', 'Learning point identity'],
+      ['zh-CN', '学习点身份'],
+    ] as const) {
+      await prisma.courseLocalization.upsert({
+        where: { courseId_language: { courseId, language } },
+        update: {
+          title,
+          shortDescription: 'Same code on video and text points.',
+          overview: 'Video and text points may share a code.',
+          whatYouLearn: items,
+          provides: items,
+        },
+        create: {
+          courseId,
+          language,
+          title,
+          shortDescription: 'Same code on video and text points.',
+          overview: 'Video and text points may share a code.',
+          whatYouLearn: items,
+          provides: items,
+        },
+      });
+    }
+    const course = await prisma.commerceCourse.findUniqueOrThrow({
+      where: { id: courseId },
+    });
+    if (!course.coverAssetId) {
+      // 合法 PNG 签名（重导入时按扩展名校验文件头）
+      const bytes = Buffer.concat([
+        Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+        Buffer.alloc(16),
+      ]);
+      const cover = await prisma.courseMediaAsset.create({
+        data: {
+          courseId,
+          kind: 'IMAGE',
+          originalName: 'cover.png',
+          mimeType: 'image/png',
+          extension: 'png',
+          size: bytes.length,
+          storageKey: `e2e/${courseId}/lp-identity-cover.png`,
+        },
+      });
+      await app.get(CourseStorageService).putMedia(cover.storageKey, bytes);
+      await prisma.commerceCourse.update({
+        where: { id: courseId },
+        data: { coverAssetId: cover.id },
+      });
+    }
+    const lesson = await prisma.lesson.findFirstOrThrow({
+      where: { courseId, code: 'L001' },
+    });
+    for (const [language, title] of [
+      ['en-GB', 'Same code, two sources'],
+      ['zh-CN', '同编号两种来源'],
+    ] as const) {
+      await prisma.lessonLocalization.upsert({
+        where: { lessonId_language: { lessonId: lesson.id, language } },
+        update: { title, description: 'Lesson description' },
+        create: {
+          lessonId: lesson.id,
+          language,
+          title,
+          description: 'Lesson description',
+        },
+      });
+    }
+    await prisma.recommendedReading.create({
+      data: {
+        lessonId: lesson.id,
+        language: 'en-GB',
+        type: 'BOOK',
+        title: 'Book',
+        author: 'Author',
+        whyRecommended: 'Why',
+        sortOrder: 0,
+      },
+    });
+  }
+
   it('imports a video+text package sharing code 1.1, keeps both rows, binds the text cut-off to the TEXT row, and round-trips through export', async () => {
     const suffix = randomBytes(4).toString('hex');
     const courseCode = `E2E-LPID-${suffix}`;
@@ -267,11 +356,29 @@ describe('Course package learning-point identity (e2e)', () => {
     expect(trial.videoCutoffSeconds).toBe(60);
     expect(trial.status).toBe('READY');
 
-    // 5) 导出草稿：video/text 两组都保留原编号 1.1
-    const exportStarted: SuccessResponse<{ jobId: string }> = await agent
+    // 5) 先发布，再导出当前线上版本（PRD §16.2：不能导出草稿或指定版本）。
+    await completeCourseForPublish(courseId);
+    const published: SuccessResponse<{
+      versionId: string;
+      versionLabel: string;
+    }> = await agent
+      .post(`/api/backoffice/courses/${courseId}/publish`)
+      .send({})
+      .expect(200);
+    const exportStarted: SuccessResponse<{
+      jobId: string;
+      versionId: string;
+      versionLabel: string;
+    }> = await agent
       .post(`/api/backoffice/courses/${courseId}/export`)
-      .send({ version: 'draft' })
+      .send({})
       .expect(202);
+    expect(exportStarted.body.data.versionId).toBe(
+      published.body.data.versionId,
+    );
+    expect(exportStarted.body.data.versionLabel).toBe(
+      published.body.data.versionLabel,
+    );
     const exportJobId = exportStarted.body.data.jobId;
     await waitForExport(exportJobId);
     const download = await agent

@@ -3,7 +3,7 @@
 // 面板内部滚动（版本列表、历史记录、课程列表表格）、无横向溢出、
 // 版本页 Current / Versions / History 分段不纵向堆叠、1672×941 与 1280×800 两种视口。
 // 运行：cd client && node --test e2e/course-layout.e2e.test.mjs（本地跑，CI 不装浏览器）。
-// 截图：保存到 UIUX_SHOTS（默认 verify-takeover-20261116/uiux-rwd-shots）。
+// 截图：仅在设置了 UIUX_SHOTS 时保存（与其它 e2e 的 E2E_SHOTS 约定一致）。
 import assert from 'node:assert/strict'
 import { mkdirSync } from 'node:fs'
 import { after, before, test } from 'node:test'
@@ -13,8 +13,8 @@ import { chromium } from 'playwright'
 import { createServer } from 'vite'
 
 const root = fileURLToPath(new URL('..', import.meta.url))
-const SHOTS = process.env.UIUX_SHOTS || '/Users/nihao/AI infra/verify-takeover-20261116/uiux-rwd-shots'
-mkdirSync(SHOTS, { recursive: true })
+const SHOTS = process.env.UIUX_SHOTS || null
+if (SHOTS) mkdirSync(SHOTS, { recursive: true })
 
 let server
 let browser
@@ -109,6 +109,7 @@ async function open(viewport, locale = 'en-GB') {
 }
 
 async function shot(page, name) {
+  if (!SHOTS) return
   await page.waitForTimeout(300)
   await page.screenshot({ path: `${SHOTS}/${name}.png` })
 }
@@ -338,6 +339,28 @@ test('1000×800（<1100）：分栏纵向折叠，仍无横向溢出且页面不
     assert.ok(state.document.scrollX <= state.viewport.width + 1, '1000 课程列表不应横向滚动')
     assert.ok(state.content.scrollX <= state.content.clientX + 1, '1000 课程列表 .content 不应横向溢出')
     await shot(page, 'course-overview-1000')
+  } finally {
+    await context.close()
+  }
+})
+
+test('880×800（<900）：页面本体不滚动、无横向溢出（壳层 cardGrow 断点）', async () => {
+  const { context, page } = await open({ width: 880, height: 800 })
+  try {
+    await page.goto(`${base}/en-GB/course/c1`)
+    await page.waitForLoadState('networkidle')
+    await page.getByTestId('course-tab-versions').click()
+    await page.waitForTimeout(200)
+    await assertPageDoesNotScroll(page, 'course-editor-page', '880 课程编辑')
+    await assertTabsStickyAndPanelBounded(page, '880 课程编辑')
+
+    await page.goto(`${base}/en-GB/course`)
+    await page.waitForLoadState('networkidle')
+    await page.getByTestId('course-overview-table-wrap').waitFor()
+    const state = await scrollState(page, 'course-overview-page')
+    assert.ok(state.document.scrollX <= state.viewport.width + 1, '880 课程列表不应横向滚动')
+    assert.ok(state.content.scrollX <= state.content.clientX + 1, '880 课程列表 .content 不应横向溢出')
+    await shot(page, 'course-overview-880')
   } finally {
     await context.close()
   }

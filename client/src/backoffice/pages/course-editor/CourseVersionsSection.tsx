@@ -1,8 +1,10 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { CourseDetail, CourseVersion, HistoryPage, IncompleteLesson, PortalPreviewLink } from '../../contracts/course';
 import { boRequest } from '../../lib/api';
 import { cachedPreviewEntry } from '../../lib/capabilities';
+import { useCoursePermissions } from '../../lib/coursePermissions';
+import { uploadCoursePackage, waitForImportJob, type ImportJobStatus } from '../../lib/packageUpload';
 import { failureCode } from '../../lib/courseErrors';
 import { useReportFailure } from './feedback';
 import { t } from '../../lib/i18n/messages';
@@ -16,6 +18,17 @@ import { historyActionLabel, historyDetailText } from './versionHistory';
 
 const asLoc = (locale: string): 'zh-CN' | 'en-GB' => (locale.startsWith('zh') ? 'zh-CN' : 'en-GB');
 
+/** PRD §15.5：来源显示为 `Sandbox X.Y` 或 `Restored from Version N`。 */
+function versionSourceLabel(version: CourseVersion, locale: string): string {
+  const zh = locale.startsWith('zh');
+  const environment = version.sourceEnvironment?.trim();
+  const label = version.sourceVersionLabel?.trim();
+  if (environment && label) return `${environment} ${label}`;
+  if (environment) return environment;
+  if (label) return zh ? `从版本 ${label} 恢复` : `Restored from Version ${label}`;
+  return '—';
+}
+
 export function CourseVersionsSection({
   locale,
   course,
@@ -27,7 +40,6 @@ export function CourseVersionsSection({
   setBusy,
   onReload,
   onNotice,
-  canPublish = true,
 }: {
   locale: string;
   course: CourseDetail;
@@ -39,10 +51,13 @@ export function CourseVersionsSection({
   setBusy: (value: boolean) => void;
   onReload: () => Promise<void>;
   onNotice: (message: string) => void;
-  /** REQ-0236：发布、删草稿、导入导出、上下线、恢复版本只给 Course=Full。 */
-  canPublish?: boolean;
 }) {
   const navigate = useNavigate();
+  // 发布 / 删草稿 / 导入导出 / 上下线 / 恢复版本按账号级课程动作逐项判定（旧服务端回退角色矩阵）。
+  const permissions = useCoursePermissions();
+  const canPublish = permissions.publish;
+  const canImport = permissions.import;
+  const canExport = permissions.export;
   // 预览入口（PREVIEW_ENTRY）：learner = 上游学员视角预览；portal = 生产投影渲染草稿（带版本）。
   const previewEntry = cachedPreviewEntry();
   const [previewOpeningId, setPreviewOpeningId] = useState<string | null>(null);
@@ -57,13 +72,15 @@ export function CourseVersionsSection({
   const [statusReason, setStatusReason] = useState('');
   const [importOpen, setImportOpen] = useState(false);
   const [importFile, setImportFile] = useState<File | null>(null);
+  const importFileRef = useRef<HTMLInputElement | null>(null);
   const [importBusy, setImportBusy] = useState(false);
-  const [exportVersion, setExportVersion] = useState('live');
+  const [importProgress, setImportProgress] = useState<number | null>(null);
+  const [exportOpen, setExportOpen] = useState(false);
   const [exportBusy, setExportBusy] = useState(false);
 
   const liveVersion = versions.find((version) => version.isLive);
   const sortedVersions = [...versions].sort((a, b) => b.versionNo - a.versionNo);
-  const versionsTable = useResizableColumns({ storageKey: 'course-editor-versions', defaultWidths: [110, 170, 180, 150, 240] });
+  const versionsTable = useResizableColumns({ storageKey: 'course-editor-versions', defaultWidths: [110, 170, 180, 150, 160, 160] });
   const historyTable = useResizableColumns({ storageKey: 'course-editor-history', defaultWidths: [160, 140, 140, 578] });
 
 
@@ -151,13 +168,55 @@ export function CourseVersionsSection({
   async function importPackage() {
     if (!importFile) return;
     setImportBusy(true);
-    const form = new FormData();
-    form.append('file', importFile);
-    const uploaded = await boRequest<{ jobId: string }>(`/api/backoffice/courses/${course.id}/import`, { method: 'POST', body: form });
+    setImportProgress(null);
+    // 大包自动走分块会话；小包仍是单次 POST，两条路径都落到同一个导入作业。
+    const uploaded = await uploadCoursePackage<ImportJobStatus>(importFile, undefined, course.id);
     if (!uploaded.success) {
       setImportBusy(false);
       setImportOpen(false);
-      reportFailure(L(locale, '导入失败', 'Import failed'), uploaded);
+      reportFailure(L(locale, '导入失败', 'Import failed'), {
+        success: false,
+        data: null,
+        error: 'INTERNAL_ERROR',
+        code: uploaded.error,
+        message: uploaded.errorMessage,
+      });
+      return;
+    }
+    // 分块通道（> 200 MB）complete 只返回 PACKAGE_QUEUED/VALIDATING，后台才拼包校验；
+    // 直接 confirm 会被服务端按 PACKAGE_CONFLICT(409) 拒绝，必须先轮询到 AWAITING_CONFIRM。
+    const outcome = await waitForImportJob(uploaded.data, (job) => {
+      setImportProgress(job.status === 'VALIDATING' ? job.progress ?? 0 : null);
+    });
+    setImportProgress(null);
+    const failImport = (message: string) => {
+      setImportBusy(false);
+      setImportOpen(false);
+      reportFailure(L(locale, '导入失败', 'Import failed'), {
+        success: false,
+        data: null,
+        error: 'INTERNAL_ERROR',
+        message,
+      });
+    };
+    if (!outcome.ok) {
+      failImport(
+        outcome.reason === 'timeout'
+          ? L(locale, '课程包校验超时，请稍后重试。', 'Package validation timed out. Try again later.')
+          : outcome.message ?? L(locale, '无法读取课程包校验进度，请稍后重试。', 'Could not read the package validation status. Try again later.'),
+      );
+      return;
+    }
+    if (outcome.job.status === 'FAILED') {
+      failImport(
+        outcome.job.error
+          ? serverText(outcome.job.error, asLoc(locale))
+          : L(locale, '课程包校验失败，请修正后重新上传。', 'Package validation failed. Fix it and upload again.'),
+      );
+      return;
+    }
+    if (outcome.job.status !== 'AWAITING_CONFIRM') {
+      failImport(L(locale, '导入已取消，请重新上传课程包。', 'The import was cancelled. Upload the package again.'));
       return;
     }
     const confirm = await boRequest(`/api/backoffice/courses/import/${uploaded.data.jobId}/confirm`, {
@@ -178,14 +237,16 @@ export function CourseVersionsSection({
   }
 
   async function exportPackage() {
+    // PRD §16.2：只导出当前线上版本；导出前由服务端再次校验 3 步完整。
     setExportBusy(true);
     const start = await boRequest<{ jobId: string }>(`/api/backoffice/courses/${course.id}/export`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ version: exportVersion }),
+      body: JSON.stringify({ version: 'live' }),
     });
     if (!start.success) {
       setExportBusy(false);
+      setExportOpen(false);
       reportFailure(L(locale, '导出失败', 'Export failed'), start);
       return;
     }
@@ -196,16 +257,19 @@ export function CourseVersionsSection({
       if (status.data.status === 'READY') {
         window.location.href = `/api/backoffice/courses/export/${start.data.jobId}/download`;
         setExportBusy(false);
+        setExportOpen(false);
         onNotice(L(locale, '课程包正在下载。', 'Course package is downloading.'));
         return;
       }
       if (status.data.status === 'FAILED') {
         setExportBusy(false);
+        setExportOpen(false);
         reportFailure(L(locale, '导出失败', 'Export failed'), { success: false, data: null, error: 'INTERNAL_ERROR', message: status.data.error ? serverText(status.data.error, locale.startsWith('zh') ? 'zh-CN' : 'en-GB') : undefined, status: 500 });
         return;
       }
     }
     setExportBusy(false);
+    setExportOpen(false);
     onNotice(L(locale, '导出超时。', 'Export timed out.'));
   }
 
@@ -290,6 +354,8 @@ export function CourseVersionsSection({
                 <button type="button" style={dangerBtn} disabled={busy || !course.hasDraft || !liveVersion} onClick={() => setDeleteOpen(true)}>
                   {L(locale, '删除草稿', 'Delete draft')}
                 </button>
+              </div>}
+              {canImport && <div className="course-ui-cardActions">
                 <button type="button" style={buttonStyle} disabled={busy} onClick={() => setImportOpen(true)}>
                   {L(locale, '导入课程包', 'Import package')}
                 </button>
@@ -314,16 +380,11 @@ export function CourseVersionsSection({
                 <button type="button" style={buttonStyle} disabled={busy || !liveVersion} onClick={() => { setStatusTarget(course.liveStatus === 'ONLINE' ? 'HIDDEN' : 'ONLINE'); setStatusOpen(true); }}>
                   {L(locale, '更改状态', 'Change status')}
                 </button>
-                <button type="button" style={buttonStyle} disabled={busy || !liveVersion || exportBusy} onClick={() => void exportPackage()}>
+              </div>}
+              {canExport && <div className="course-ui-cardActions">
+                <button type="button" style={buttonStyle} data-testid="export-open" disabled={busy || !liveVersion || exportBusy} onClick={() => setExportOpen(true)}>
                   {exportBusy ? L(locale, '导出中…', 'Exporting…') : L(locale, '导出课程包', 'Export package')}
                 </button>
-              </div>}
-              {canPublish && <div className="course-ui-cardLine">
-                <label style={{ fontSize: 12 }}>{L(locale, '导出版本', 'Export version')}</label>
-                <select value={exportVersion} onChange={(event) => setExportVersion(event.target.value)}>
-                  <option value="live">{L(locale, '线上版本', 'Live')}</option>
-                  <option value="working">{L(locale, '草稿', 'Working')}</option>
-                </select>
               </div>}
             </div>
           </div>
@@ -343,16 +404,21 @@ export function CourseVersionsSection({
                 <tr>
                   <th>{L(locale, '版本', 'Version')}{versionsTable.resizeHandle(0)}</th>
                   <th>{L(locale, '发布时间', 'Published')}{versionsTable.resizeHandle(1)}</th>
-                  <th>{L(locale, '来源', 'Source')}{versionsTable.resizeHandle(2)}</th>
-                  <th>{L(locale, '操作', 'Actions')}{versionsTable.resizeHandle(3)}</th>
+                  <th>{L(locale, '导出', 'Exported')}{versionsTable.resizeHandle(2)}</th>
+                  <th>{L(locale, '来源', 'Source')}{versionsTable.resizeHandle(3)}</th>
+                  <th>{L(locale, '操作', 'Actions')}{versionsTable.resizeHandle(4)}</th>
                 </tr>
               </thead>
               <tbody>
                 {sortedVersions.map((version) => (
                   <tr key={version.id}>
                     <td>{version.versionLabel}{version.isLive ? ` · ${L(locale, '线上', 'Live')}` : ''}</td>
-                    <td>{fmtDate(version.wentLiveAt ?? version.createdAt, locale)}</td>
-                    <td>{version.sourceVersionLabel ?? version.sourceEnvironment ?? '—'}</td>
+                    <td>
+                      <div>{fmtDate(version.wentLiveAt ?? version.createdAt, locale)}</div>
+                      {version.publishedBy && <div style={{ fontSize: 11, opacity: 0.65 }}>{version.publishedBy}</div>}
+                    </td>
+                    <td data-testid={`version-exported-${version.id}`}>{version.exportedAt ? fmtDate(version.exportedAt, locale) : '—'}</td>
+                    <td>{versionSourceLabel(version, locale)}</td>
                     <td>
                       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                         <button
@@ -368,7 +434,7 @@ export function CourseVersionsSection({
                     </td>
                   </tr>
                 ))}
-                {sortedVersions.length === 0 && <tr><td colSpan={4} style={{ textAlign: 'center', padding: 18, opacity: 0.7 }}>{L(locale, '暂无版本。', 'No versions yet.')}</td></tr>}
+                {sortedVersions.length === 0 && <tr><td colSpan={5} style={{ textAlign: 'center', padding: 18, opacity: 0.7 }}>{L(locale, '暂无版本。', 'No versions yet.')}</td></tr>}
               </tbody>
             </table>
           </div>
@@ -499,12 +565,57 @@ export function CourseVersionsSection({
         </Modal>
       )}
 
+      {exportOpen && (
+        <Modal title={L(locale, '导出课程包', 'Export package')} onClose={() => setExportOpen(false)}>
+          <p style={{ fontSize: 13 }}>
+            {L(
+              locale,
+              `导出线上版本 ${liveVersion?.versionLabel ?? ''}？只导出当前线上版本，不会导出草稿。`,
+              `Export live version ${liveVersion?.versionLabel ?? ''}? Only the current live version is exported; drafts are never exported.`,
+            )}
+          </p>
+          <p style={{ fontSize: 12, color: '#5A6577', marginTop: 6 }}>
+            {L(
+              locale,
+              '导出后，下一次发布会进入新的版本系列（沙盒为 X+1.1）。',
+              'After export, the next publish starts a new version series (X+1.1 in Sandbox).',
+            )}
+          </p>
+          <p style={{ fontSize: 12, color: '#5A6577', marginTop: 6 }}>
+            {L(locale, '文件名', 'File name')}: {course.code}_{liveVersion?.versionLabel ?? 'live'}.zip
+          </p>
+          <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
+            <button type="button" style={primaryBtn} data-testid="export-confirm" disabled={exportBusy} onClick={() => void exportPackage()}>{exportBusy ? L(locale, '导出中…', 'Exporting…') : L(locale, '导出', 'Export')}</button>
+            <button type="button" style={buttonStyle} disabled={exportBusy} onClick={() => setExportOpen(false)}>{L(locale, '取消', 'Cancel')}</button>
+          </div>
+        </Modal>
+      )}
+
       {importOpen && (
         <Modal title={L(locale, '导入课程包', 'Import package')} onClose={() => setImportOpen(false)}>
           <p style={{ fontSize: 13 }}>{L(locale, '课程包替换当前课程的草稿。线上版本不变，直到发布。', 'The package replaces the draft of this course. What is live does not change until you publish.')}</p>
           <Field label={L(locale, '上传 .zip', 'Upload .zip')}>
-            <input type="file" accept=".zip,.lgcourse.zip" onChange={(event) => setImportFile(event.target.files?.[0] ?? null)} />
+            <input
+              ref={importFileRef}
+              type="file"
+              accept=".zip,.lgcourse.zip"
+              onChange={(event) => setImportFile(event.target.files?.[0] ?? null)}
+            />
           </Field>
+          {importFile && (
+            <div style={{ fontSize: 12, opacity: 0.75, marginTop: 6 }} data-testid="import-file-info">
+              {importFile.name} · {(importFile.size / (1024 * 1024)).toFixed(2)} MB
+              {importBusy && ` · ${L(locale, '上传中…', 'Uploading…')}`}
+              <button type="button" className="button buttonGhost" style={{ marginLeft: 8 }} disabled={importBusy} onClick={() => importFileRef.current?.click()}>
+                {L(locale, '更换文件', 'Replace file')}
+              </button>
+            </div>
+          )}
+          {importBusy && importProgress !== null && (
+            <div data-testid="import-validation-progress" style={{ fontSize: 12, color: '#5A6577', marginTop: 6 }}>
+              {L(locale, `正在校验课程包…（${importProgress}%）`, `Validating the package… (${importProgress}%)`)}
+            </div>
+          )}
           <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
             <button type="button" style={primaryBtn} disabled={!importFile || importBusy} onClick={() => void importPackage()}>{importBusy ? L(locale, '导入中…', 'Importing…') : L(locale, '导入', 'Import')}</button>
             <button type="button" style={buttonStyle} onClick={() => setImportOpen(false)}>{L(locale, '取消', 'Cancel')}</button>

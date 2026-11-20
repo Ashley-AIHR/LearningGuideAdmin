@@ -8,13 +8,12 @@ import type {
   PortalPreviewLink,
   TrialSettings,
 } from '../contracts/course';
-import { useEmployee } from '../employeeSession';
 import { boRequest, type ApiFailure } from '../lib/api';
 import { courseErrorText, courseFailureNotice, failureNeedsReload, isStale } from '../lib/courseErrors';
 import { t } from '../lib/i18n/messages';
 import type { Locale } from '../lib/i18n/config';
 import { cachedPreviewEntry } from '../lib/capabilities';
-import { isActionAllowed } from '../rbac/permissions';
+import { useCoursePermissions } from '../lib/coursePermissions';
 import { categoryLabel } from '../lib/categoryLabel';
 import { FailureProvider } from './course-editor/feedback';
 
@@ -29,11 +28,12 @@ type Tab = 'info' | 'content' | 'trial' | 'versions';
 export function CourseEditorPage() {
   const { courseId = '', locale = 'en-GB' } = useParams();
   const navigate = useNavigate();
-  // REQ-0236：Edit 级（Graphic Designer）只改已有课程内容；发布 / 导入导出 / 上下线 /
-  // 恢复版本，以及试看和价格（商业配置）只给 Course=Full。后端是最终边界，这里只收起按钮。
-  const employee = useEmployee();
-  const canPublish = isActionAllowed(employee.role, 'course', 'PUBLISH');
-  const canManageCommerce = isActionAllowed(employee.role, 'course', 'CREATE');
+  // 账号级课程动作（旧服务端回退角色矩阵）：
+  // 编辑内容 = course.edit；试看与价格（商业配置）= course.create；
+  // 发布/导入导出/上下线/恢复在 Versions 区各自判定，不再用一个 canPublish 全收。
+  const permissions = useCoursePermissions();
+  const canEdit = permissions.edit;
+  const canManageCommerce = permissions.create;
   const [course, setCourse] = useState<CourseDetail | null>(null);
   const [trial, setTrial] = useState<TrialSettings | null>(null);
   const [versions, setVersions] = useState<CourseVersion[]>([]);
@@ -215,6 +215,12 @@ export function CourseEditorPage() {
           <span className="course-ui-summaryStrong">{course.hasDraft ? L(locale, '未发布', 'Not published') : L(locale, '无草稿', 'No draft')}</span>
           {course.hasDraft && (
             <>
+              {course.draftSourceType === 'IMPORT' && (
+                <>
+                  <span className="course-ui-summarySep">·</span>
+                  <span data-testid="course-summary-imported">{L(locale, '从课程包导入', 'Imported')}</span>
+                </>
+              )}
               <span className="course-ui-summarySep">·</span>
               <span>{L(locale, `已完成 ${course.completeness.completedSteps}/3 步`, `${course.completeness.completedSteps} of 3 steps complete`)}</span>
             </>
@@ -285,11 +291,18 @@ export function CourseEditorPage() {
       )}
       {notice && <p role="status" className="course-ui-alert" style={{ background: '#F3F7FF', marginTop: 10 }}>{notice}</p>}
 
+      {(tab !== 'versions' && (tab === 'trial' ? !canManageCommerce : !canEdit)) && (
+        <p role="status" className="course-ui-alert" data-testid="course-readonly" style={{ background: '#F3F7FF', marginTop: 10 }}>
+          {L(locale, '只读：你的账号没有修改此内容的权限。', 'Read-only: your account is not allowed to change this content.')}
+        </p>
+      )}
       <div className="course-ui-panel" data-course-tab-panel data-testid={`course-tab-panel-${tab}`}>
-        {tab === 'info' && <CourseInfoSection locale={locale} course={course} categories={localizedCategories} busy={busy} setBusy={setBusy} onReload={load} onNotice={showNotice} onNext={() => setTab('content')} />}
-        {tab === 'content' && <CourseContentSection locale={locale} course={course} activeLessonId={activeLessonId} setActiveLessonId={setActiveLessonId} contentLanguage={contentLanguage} busy={busy} setBusy={setBusy} onReload={load} onNotice={showNotice} />}
-        {tab === 'trial' && trial && <CourseTrialSection canManage={canManageCommerce} locale={locale} courseId={course.id} trial={trial} course={course} busy={busy} setBusy={setBusy} onReload={load} onNotice={showNotice} contentLanguage={contentLanguage} />}
-        {tab === 'versions' && <CourseVersionsSection canPublish={canPublish} locale={locale} course={course} versions={versions} history={history} historyPage={historyPage} setHistoryPage={setHistoryPage} busy={busy} setBusy={setBusy} onReload={load} onNotice={showNotice} />}
+        <div style={{ display: 'contents' }} inert={tab === 'trial' ? !canManageCommerce : tab === 'versions' ? false : !canEdit}>
+          {tab === 'info' && <CourseInfoSection locale={locale} course={course} categories={localizedCategories} busy={busy} setBusy={setBusy} onReload={load} onNotice={showNotice} onNext={() => setTab('content')} />}
+          {tab === 'content' && <CourseContentSection locale={locale} course={course} activeLessonId={activeLessonId} setActiveLessonId={setActiveLessonId} contentLanguage={contentLanguage} busy={busy} setBusy={setBusy} onReload={load} onNotice={showNotice} />}
+          {tab === 'trial' && trial && <CourseTrialSection canManage={canManageCommerce} locale={locale} courseId={course.id} trial={trial} course={course} busy={busy} setBusy={setBusy} onReload={load} onNotice={showNotice} contentLanguage={contentLanguage} />}
+          {tab === 'versions' && <CourseVersionsSection locale={locale} course={course} versions={versions} history={history} historyPage={historyPage} setHistoryPage={setHistoryPage} busy={busy} setBusy={setBusy} onReload={load} onNotice={showNotice} />}
+        </div>
       </div>
     </section>
     </FailureProvider>

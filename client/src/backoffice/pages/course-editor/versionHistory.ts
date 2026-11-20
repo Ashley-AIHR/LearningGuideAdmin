@@ -55,6 +55,7 @@ export function historyDetailText(item: HistoryPage['items'][number], locale: st
     case 'IMPORT_PACKAGE':
       return (
         [
+          detail.fileName ? text(detail.fileName) : null,
           detail.versionLabel ? `${zh ? '版本' : 'Version'} ${text(detail.versionLabel)}` : null,
           detail.sourceVersionLabel
             ? `${zh ? '来源' : 'from'} ${text(detail.sourceVersionLabel)}`

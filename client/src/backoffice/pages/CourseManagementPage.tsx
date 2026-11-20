@@ -1,16 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 
-import { useEmployee } from '../employeeSession';
 import type { CourseList } from '../contracts/course'
 import { useResizableColumns } from '../components/resizableColumns'
 import { Pagination } from '../components/Pagination';
 import { usePageSize } from '../components/paginationState';
 import { boRequest } from '../lib/api'
-import { cachedCapabilities } from '../lib/capabilities'
+import { cachedAccountFeatures, cachedCapabilities } from '../lib/capabilities'
+import { useCoursePermissions } from '../lib/coursePermissions'
 import { categoryLabel } from '../lib/categoryLabel'
 import { courseErrorText, courseFailureNotice, type CourseFailure } from '../lib/courseErrors'
 import { createCourseBody } from '../lib/courseRequests'
+import { uploadCoursePackage, waitForImportJob } from '../lib/packageUpload'
 import { uploadFileWithProgress } from '../lib/upload'
 import { t } from '../lib/i18n/messages'
 import type { Locale } from '../lib/i18n/config'
@@ -78,10 +79,18 @@ export function CourseManagementPage() {
 }
 
 function CourseManagementInner({ locale }: { locale: ReturnType<typeof useLocale> }) {
-  const employee = useEmployee()
   const navigate = useNavigate()
   const L = (zh: string, en: string) => (locale.startsWith('zh') ? zh : en)
-  const canPublish = employee.role === 'ADMIN' || employee.role === 'OPERATION_ADMIN'
+  // 课程动作按账号级功能键逐项判定（旧服务端回退角色矩阵），不再硬编码角色。
+  const permissions = useCoursePermissions()
+  const canPublish = permissions.publish
+  const canCreate = permissions.create
+  const canImport = permissions.import
+  const canExport = permissions.export
+  const accountFeatures = cachedAccountFeatures()
+  const canOperations =
+    cachedCapabilities().has('operations') &&
+    (accountFeatures === null || accountFeatures.has('module.operations'))
   const [list, setList] = useState<CourseList | null>(null)
   const [loading, setLoading] = useState(true)
   const [page, setPage] = useState(1)
@@ -214,23 +223,23 @@ function CourseManagementInner({ locale }: { locale: ReturnType<typeof useLocale
     openCourse(result.data.id)
   }
 
-  // 轮询后台导入作业，直到校验完成 / 失败 / 取消（异步导入：上传即返回，处理在后台）
+  // 轮询后台导入作业，直到校验完成 / 失败 / 取消（异步导入：上传即返回，处理在后台）。
+  // 分块通道（> 200 MB）complete 返回 PACKAGE_QUEUED/VALIDATING，必须继续轮询到 AWAITING_CONFIRM。
   async function pollImportJob(initial: JobView): Promise<JobView> {
-    const terminal = new Set(['AWAITING_CONFIRM', 'FAILED', 'CANCELLED'])
-    let job = initial
-    for (let i = 0; i < 600 && !terminal.has(job.status); i++) {
-      await new Promise((r) => setTimeout(r, 1500))
-      const poll = await boRequest<JobView>(`/api/backoffice/courses/import/${job.jobId}`)
-      if (!poll.success) {
-        setMessage(uploadErrorText(locale, poll.error, poll.message))
-        return job
-      }
-      job = poll.data
+    const outcome = await waitForImportJob<JobView>(initial, (job) => {
+      setImportJob(job)
       if (job.status === 'VALIDATING') {
         setMessage(L(`正在后台解析并校验素材…（${job.progress ?? 0}%）`, `Parsing and validating materials… (${job.progress ?? 0}%)`))
       }
+    })
+    if (!outcome.ok) {
+      if (outcome.reason === 'timeout') {
+        setMessage(L('导入校验超时，请稍后重试。', 'Import validation timed out. Try again later.'))
+      } else {
+        setMessage(uploadErrorText(locale, outcome.code ?? 'INTERNAL_ERROR', outcome.message))
+      }
     }
-    return job
+    return outcome.job
   }
 
   async function onPickRawFile(file: File) {
@@ -315,17 +324,18 @@ function CourseManagementInner({ locale }: { locale: ReturnType<typeof useLocale
   }
 
   async function exportCourse(course: CourseList['courses'][number]) {
+    // PRD §16.2：只导出当前线上版本（不提供草稿导出，也不会在失败时回退草稿）。
+    if (!course.liveVersionId) {
+      setMessage(L('课程还没有线上版本，请先发布后再导出。', 'This course has no live version. Publish it before exporting.'))
+      return
+    }
     setExportingId(course.id)
     setMessage(null)
-    const startExport = (version?: string) =>
-      boRequest<{ jobId: string; fileName?: string }>(`/api/backoffice/courses/${course.id}/export`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(version ? { version } : {}),
-      })
-    // 有线上版本 → 先导出线上版本；未发布或线上版本导出被拒（如不完整）→ 回退导出当前草稿
-    let start = await startExport(course.liveVersionId ? undefined : 'working')
-    if (!start.success && course.liveVersionId) start = await startExport('working')
+    const start = await boRequest<{ jobId: string; fileName?: string }>(`/api/backoffice/courses/${course.id}/export`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ version: 'live' }),
+    })
     if (!start.success) {
       setExportingId(null)
       setMessage(uploadErrorText(locale, start.error, start.message, start))
@@ -381,13 +391,20 @@ function CourseManagementInner({ locale }: { locale: ReturnType<typeof useLocale
     setBusy(true)
     setMessage(null)
     setUploadPct(0)
-    const result = await uploadFileWithProgress<JobView>(`/api/backoffice/courses/import`, file, setUploadPct)
+    const result = await uploadCoursePackage<JobView>(file, (pct) => setUploadPct(pct))
     setUploadPct(null)
+    if (!result.success) {
+      setBusy(false)
+      setMessage(uploadErrorText(locale, result.error, result.errorMessage))
+      return
+    }
+    // 上传接口返回时作业可能还在后台校验（> 200 MB 分块通道 complete 返回 PACKAGE_QUEUED/VALIDATING）：
+    // 直传通常已是终态，轮询会立即返回；分块则轮到 AWAITING_CONFIRM / FAILED / CANCELLED 才停。
+    setImportJob(result.data)
+    const job = await pollImportJob(result.data)
     setBusy(false)
-    if (result.success) {
-      setImportJob(result.data)
-      if (result.data.status === 'FAILED') setMessage(result.data.error ?? L('导入校验失败。', 'Import validation failed.'))
-    } else setMessage(uploadErrorText(locale, result.error, result.errorMessage))
+    setImportJob(job)
+    if (job.status === 'FAILED') setMessage(job.error ? uploadErrorText(locale, '', job.error) : L('导入校验失败。', 'Import validation failed.'))
   }
 
   async function confirmImport(onConflict: string, overwriteDraft = false) {
@@ -443,17 +460,19 @@ function CourseManagementInner({ locale }: { locale: ReturnType<typeof useLocale
         <div className="course-ui-overviewHeadMain">
           <h1 className="cardTitle">{L('课程概览', 'Course Overview')}</h1>
         </div>
-        {canPublish && (
+        {(canCreate || canImport || canOperations) && (
           <div className="course-ui-overviewActions">
-            {cachedCapabilities().has('operations') && (
+            {canOperations && (
               <button type="button" className="button buttonGhost" disabled={busy} onClick={() => navigate(`/${locale}/operations`)}>
                 {L('运营位', 'Operations')}
               </button>
             )}
-            <button type="button" className="button buttonGhost" disabled={busy} onClick={() => setShowCreate(true)}>
-              {L('新建课程', 'Create course')}
-            </button>
-            <div className="course-ui-importAnchor">
+            {canCreate && (
+              <button type="button" className="button buttonGhost" disabled={busy} onClick={() => setShowCreate(true)}>
+                {L('新建课程', 'Create course')}
+              </button>
+            )}
+            {canImport && <div className="course-ui-importAnchor">
               <button
                 type="button"
                 className="button"
@@ -477,7 +496,7 @@ function CourseManagementInner({ locale }: { locale: ReturnType<typeof useLocale
                   </button>
                 </div>
               )}
-            </div>
+            </div>}
           </div>
         )}
         <input
@@ -769,7 +788,7 @@ function CourseManagementInner({ locale }: { locale: ReturnType<typeof useLocale
                         >
                           <button type="button" className="button buttonGhost" style={{ justifyContent: 'flex-start' }} onClick={() => { setActionMenuId(null); openCourse(course.id) }}>{L('编辑内容', 'Edit content')}</button>
                           <button type="button" className="button buttonGhost" style={{ justifyContent: 'flex-start' }} onClick={() => { setActionMenuId(null); openCourse(course.id) }}>{L('版本', 'Versions')}</button>
-                          <button
+                          {canPublish && <button
                             type="button"
                             className="button buttonGhost"
                             disabled={!course.published}
@@ -778,16 +797,17 @@ function CourseManagementInner({ locale }: { locale: ReturnType<typeof useLocale
                             title={!course.published ? L('请先发布', 'Publish first') : undefined}
                           >
                             {L('更改状态', 'Change status')}
-                          </button>
-                          <button
+                          </button>}
+                          {canExport && <button
                             type="button"
                             className="button buttonGhost"
-                            disabled={busy || exportingId !== null}
+                            disabled={busy || exportingId !== null || !course.liveVersionId}
                             style={{ justifyContent: 'flex-start' }}
+                            title={!course.liveVersionId ? L('请先发布线上版本', 'Publish a live version first') : undefined}
                             onClick={() => { setActionMenuId(null); void exportCourse(course) }}
                           >
                             {exportingId === course.id ? L('导出中…', 'Exporting…') : L('导出', 'Export')}
-                          </button>
+                          </button>}
                         </div>
                       )}
                     </div>
@@ -839,6 +859,7 @@ function ImportPanel({
   onIgnore: () => void
 }) {
   const zh = locale.startsWith('zh')
+  const terminal = job.status === 'AWAITING_CONFIRM' || job.status === 'FAILED' || job.status === 'CANCELLED'
   const errors = job.report?.errors ?? []
   const warnings = job.report?.warnings ?? []
   // 后端在 AWAITING_CONFIRM 阶段就已预判 Course ID 是否已存在：
@@ -863,7 +884,19 @@ function ImportPanel({
           </>
         )}
       </p>
-      {job.error && <div style={{ color: '#b42318', fontSize: 13, marginBottom: 8 }}>{serverText(job.error, locale as Locale)}</div>}
+      {!terminal && (
+        // 分块通道 complete 后作业仍在后台拼包/校验：显示进度，确认按钮只在 AWAITING_CONFIRM 出现。
+        <div data-testid="import-validating" style={{ marginTop: 4, marginBottom: 8 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 4 }}>
+            <span>{zh ? '正在后台解析并校验课程包…' : 'Parsing and validating the package…'}</span>
+            <span>{job.progress ?? 0}%</span>
+          </div>
+          <div style={{ height: 8, background: '#E8EDF5', borderRadius: 4, overflow: 'hidden' }}>
+            <div style={{ width: `${Math.max(0, Math.min(100, job.progress ?? 0))}%`, height: '100%', background: '#1D6BFF', transition: 'width 0.2s ease' }} />
+          </div>
+        </div>
+      )}
+      {job.error && <div data-testid="import-error" style={{ color: '#b42318', fontSize: 13, marginBottom: 8 }}>{serverText(job.error, locale as Locale)}</div>}
       {errors.length > 0 && (
         <div style={{ color: '#b42318', fontSize: 13 }}>
           {errors.map((e, i) => <div key={i}>{e.code}: {serverText(e.message, locale as Locale)}</div>)}
@@ -875,6 +908,18 @@ function ImportPanel({
           {warnings.map((w, i) => <div key={i} style={{ opacity: 0.8 }}>{w.code}: {serverText(w.message, locale as Locale)}</div>)}
         </details>
       )}
+      {(job.status === 'FAILED' || job.status === 'CANCELLED') && (
+        <div style={{ marginTop: 12 }}>
+          <p style={{ margin: '0 0 8px', fontSize: 13, color: job.status === 'FAILED' ? '#b42318' : '#5A6577' }}>
+            {job.status === 'FAILED'
+              ? (zh ? '课程包校验失败，请修正后重新上传。' : 'Package validation failed. Fix it and upload again.')
+              : (zh ? '导入已取消。' : 'Import cancelled.')}
+          </p>
+          <button className="button buttonGhost" data-testid="import-cancel" disabled={busy} onClick={onIgnore}>
+            {zh ? '取消本次导入' : 'Cancel import'}
+          </button>
+        </div>
+      )}
       {job.status === 'AWAITING_CONFIRM' && (
         <div style={{ marginTop: 12 }}>
           {effectiveNotice?.kind === 'overwrite' ? (
@@ -885,7 +930,7 @@ function ImportPanel({
                   : `Course ${effectiveNotice?.courseCode} already exists as a draft (never published). Overwrite its sandbox draft with this package? Only the draft is replaced; live content is unaffected.`}
               </p>
               <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
-                <button className="button" disabled={busy} onClick={() => onConfirm('ABORT', true)}>
+                <button className="button" data-testid="import-confirm-overwrite" disabled={busy} onClick={() => onConfirm('ABORT', true)}>
                   {zh ? '覆盖草稿' : 'Overwrite draft'}
                 </button>
                 <button className="button buttonGhost" disabled={busy} onClick={onIgnore}>
@@ -906,7 +951,7 @@ function ImportPanel({
             </div>
           ) : (
             <div style={{ display: 'flex', gap: 8 }}>
-              <button className="button" disabled={busy} onClick={() => onConfirm('ABORT')}>
+              <button className="button" data-testid="import-confirm" disabled={busy} onClick={() => onConfirm('ABORT')}>
                 {zh ? '导入课程' : 'Import course'}
               </button>
               <button className="button buttonGhost" disabled={busy} onClick={onIgnore}>

@@ -2,6 +2,7 @@ import {
   assertExportSelectorBody,
   encodeJobByteTotal,
   formatBytes,
+  PackageJobsService,
   parseExportSelector,
 } from './package-jobs.service';
 
@@ -43,54 +44,44 @@ describe('encodeJobByteTotal', () => {
   });
 });
 
-describe('parseExportSelector', () => {
-  it('defaults to the live version', () => {
+describe('parseExportSelector — PRD §16.2 只导出当前线上版本', () => {
+  it('defaults to the live version and accepts the explicit live selector', () => {
     expect(parseExportSelector(undefined)).toEqual({ kind: 'live' });
     expect(parseExportSelector({})).toEqual({ kind: 'live' });
-  });
-
-  it('supports working/draft and live (case-insensitive, trimmed)', () => {
-    expect(parseExportSelector({ version: 'working' })).toEqual({
-      kind: 'draft',
-    });
-    expect(parseExportSelector({ version: ' draft ' })).toEqual({
-      kind: 'draft',
-    });
-    expect(parseExportSelector({ version: 'LIVE' })).toEqual({ kind: 'live' });
-  });
-
-  it('resolves version:N by version number or by version label', () => {
-    expect(parseExportSelector({ version: 'version:4' })).toEqual({
-      kind: 'versionNo',
-      versionNo: 4,
-    });
-    expect(parseExportSelector({ version: 'version:1.2' })).toEqual({
-      kind: 'versionLabel',
-      label: '1.2',
-    });
-    expect(parseExportSelector({ version: 'version:Version 3' })).toEqual({
-      kind: 'versionLabel',
-      label: 'Version 3',
-    });
-  });
-
-  it('keeps the legacy versionId and sourceVersion fields working', () => {
-    expect(
-      parseExportSelector({
-        version: 'working',
-        versionId: '11111111-1111-1111-1111-111111111111',
-      }),
-    ).toEqual({
-      kind: 'versionId',
-      versionId: '11111111-1111-1111-1111-111111111111',
-    });
-    expect(parseExportSelector({ sourceVersion: 'live' })).toEqual({
+    expect(parseExportSelector({ version: '' })).toEqual({ kind: 'live' });
+    expect(parseExportSelector({ version: ' live ' })).toEqual({ kind: 'live' });
+    expect(parseExportSelector({ version: 'LIVE' })).toEqual({
       kind: 'live',
     });
-    expect(parseExportSelector({ sourceVersion: 'version:2' })).toEqual({
-      kind: 'versionNo',
-      versionNo: 2,
-    });
+  });
+
+  it('rejects every draft / specific-version selector with 400 VALIDATION_ERROR', () => {
+    for (const body of [
+      { version: 'working' },
+      { version: ' draft ' },
+      { version: 'version:4' },
+      { version: 'version:1.2' },
+      { version: 'version:Version 3' },
+      { version: '1.1' },
+      { versionId: '11111111-1111-1111-1111-111111111111' },
+      { sourceVersion: 'live' },
+      { sourceVersion: 'version:2' },
+    ]) {
+      let error: unknown;
+      try {
+        parseExportSelector(body);
+      } catch (caught) {
+        error = caught;
+      }
+      expect(error).toMatchObject({
+        code: 'VALIDATION_ERROR',
+        httpStatus: 400,
+      });
+      // 文案必须说明只能导出线上版本
+      expect(String((error as Error).message)).toContain(
+        'current live version',
+      );
+    }
   });
 });
 
@@ -99,7 +90,11 @@ describe('assertExportSelectorBody', () => {
     expect(() => assertExportSelectorBody(undefined)).not.toThrow();
     expect(() => assertExportSelectorBody({})).not.toThrow();
     expect(() =>
-      assertExportSelectorBody({ version: 'live', versionId: '', sourceVersion: 'working' }),
+      assertExportSelectorBody({
+        version: 'live',
+        versionId: '',
+        sourceVersion: '',
+      }),
     ).not.toThrow();
   });
 
@@ -121,5 +116,234 @@ describe('assertExportSelectorBody', () => {
         httpStatus: 400,
       });
     }
+  });
+});
+
+describe('PackageJobsService — 课程包分块会话（> 200 MB）', () => {
+  function make() {
+    const prisma = {
+      coursePackageJob: {
+        findUnique: jest.fn(),
+        create: jest.fn().mockResolvedValue({}),
+        update: jest.fn().mockResolvedValue({}),
+      },
+    };
+    const storage = {
+      stagingKey: (jobId: string, name: string) => `${jobId}/${name}`,
+      putStaging: jest.fn().mockResolvedValue(undefined),
+      hasStaging: jest.fn().mockResolvedValue(true),
+      getStaging: jest.fn(),
+      removeStaging: jest.fn().mockResolvedValue(undefined),
+    };
+    const config = {
+      packageMaxBytes: 8 * GB,
+      packageDirectUploadBytes: 200 * MB,
+    };
+    const svc = new PackageJobsService(
+      prisma as never,
+      storage as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      config as never,
+    );
+    return { svc, prisma, storage };
+  }
+
+  it('creates an UPLOADING_PACKAGE job and accepts a 1 GB package', async () => {
+    const { svc, prisma } = make();
+    const result = await svc.createPackageUploadSession(
+      { name: 'big.lgcourse.zip', bytesTotal: 1 * GB },
+      'emp-1',
+    );
+    expect(result.jobId).toBeTruthy();
+    expect(result.chunkSize).toBe(5 * MB);
+    const data = prisma.coursePackageJob.create.mock.calls[0][0].data;
+    expect(data.stage).toBe('UPLOADING_PACKAGE');
+    expect(data.bytesTotal).toBe(1 * GB);
+    expect(data.courseId).toBeNull();
+  });
+
+  it('rejects unsupported extensions and oversize declarations', async () => {
+    const { svc } = make();
+    await expect(
+      svc.createPackageUploadSession({ name: 'big.rar', bytesTotal: 1 }, null),
+    ).rejects.toMatchObject({ code: 'PACKAGE_INVALID_ZIP', httpStatus: 400 });
+    await expect(
+      svc.createPackageUploadSession(
+        { name: 'big.zip', bytesTotal: 9 * GB },
+        null,
+      ),
+    ).rejects.toMatchObject({ code: 'VALIDATION_ERROR', httpStatus: 400 });
+  });
+
+  it('does not accept package chunks on a raw upload job', async () => {
+    const { svc, prisma } = make();
+    prisma.coursePackageJob.findUnique.mockResolvedValue({
+      id: 'j1',
+      stage: 'UPLOADING',
+      bytesTotal: 10,
+      requestId: null,
+    });
+    await expect(svc.appendPackageChunk('j1', 0, Buffer.from('x'))).rejects.toMatchObject({
+      code: 'RAW_UPLOAD_NOT_ACTIVE',
+      httpStatus: 409,
+    });
+  });
+
+  it('refuses to complete when a chunk is missing', async () => {
+    const { svc, prisma, storage } = make();
+    prisma.coursePackageJob.findUnique.mockResolvedValue({
+      id: 'j1',
+      stage: 'UPLOADING_PACKAGE',
+      bytesTotal: 10,
+      requestId: null,
+    });
+    storage.hasStaging.mockResolvedValue(false);
+    await expect(svc.completePackageUpload('j1')).rejects.toMatchObject({
+      code: 'RAW_UPLOAD_INCOMPLETE',
+      httpStatus: 400,
+    });
+  });
+});
+
+describe('PackageJobsService — 分块拼包后直接校验（不做 Excel 转换）', () => {
+  it('assembles chunks, hashes the package and starts validation', async () => {
+    const job = {
+      id: 'j1',
+      kind: 'IMPORT',
+      status: 'VALIDATING',
+      stage: 'UPLOADING_PACKAGE',
+      progress: 0,
+      error: null,
+      courseId: null,
+      sourceVersionId: null,
+      fileLabel: null,
+      manifest: null,
+      report: null,
+      conflicts: null,
+      bytesTotal: 6 * MB,
+      requestId: null,
+    };
+    const prisma = {
+      coursePackageJob: {
+        findUnique: jest.fn().mockResolvedValue(job),
+        create: jest.fn(),
+        update: jest.fn().mockResolvedValue({}),
+      },
+    };
+    const storage = {
+      stagingKey: (jobId: string, name: string) => `${jobId}/${name}`,
+      putStaging: jest.fn(),
+      hasStaging: jest.fn().mockResolvedValue(true),
+      getStaging: jest.fn().mockResolvedValue(Buffer.from('abc')),
+      removeStaging: jest.fn().mockResolvedValue(undefined),
+    };
+    const config = { packageMaxBytes: 8 * GB, packageDirectUploadBytes: 200 * MB };
+    const svc = new PackageJobsService(
+      prisma as never,
+      storage as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      config as never,
+    );
+    const validate = jest
+      .spyOn(svc as never as { runValidationFromFile: (...args: unknown[]) => Promise<void> }, 'runValidationFromFile')
+      .mockResolvedValue(undefined);
+    await svc.completePackageUpload('j1');
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(storage.getStaging).toHaveBeenCalledTimes(2);
+    expect(validate).toHaveBeenCalledWith('j1', expect.stringContaining('package.zip'));
+    const update = prisma.coursePackageJob.update.mock.calls
+      .map((call) => call[0].data)
+      .find((data) => data.stage === 'VALIDATING');
+    expect(update?.packageHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(update?.bytesTotal).toBe(6 * MB);
+  });
+});
+
+describe('PackageJobsService.startExport — 只导出当前线上版本（PRD §16.2）', () => {
+  function make(exportable = { versionId: 'v-live', versionLabel: '2.1' }) {
+    const prisma = {
+      commerceCourse: {
+        findUnique: jest.fn().mockResolvedValue({ code: 'C001' }),
+      },
+      coursePackageJob: {
+        create: jest.fn().mockResolvedValue({}),
+      },
+    };
+    const publishing = {
+      assertExportable: jest.fn().mockResolvedValue(exportable),
+    };
+    const config = {
+      packageMaxBytes: 8 * GB,
+      packageDirectUploadBytes: 200 * MB,
+    };
+    const svc = new PackageJobsService(
+      prisma as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      publishing as never,
+      config as never,
+    );
+    return { svc, prisma, publishing };
+  }
+
+  it('defaults to the live version returned by assertExportable', async () => {
+    const { svc, prisma, publishing } = make();
+    const result = await svc.startExport('course-1', null);
+    expect(publishing.assertExportable).toHaveBeenCalledWith('course-1');
+    expect(result).toMatchObject({
+      status: 'EXPORTING',
+      versionId: 'v-live',
+      versionLabel: '2.1',
+      fileName: 'C001_2.1.zip',
+    });
+    const calls = prisma.coursePackageJob.create.mock.calls as unknown as Array<
+      [{ data: Record<string, unknown> }]
+    >;
+    const data = calls[0][0].data;
+    expect(data).toMatchObject({
+      kind: 'EXPORT',
+      status: 'EXPORTING',
+      courseId: 'course-1',
+      sourceVersionId: 'v-live',
+      fileLabel: 'C001_2.1.zip',
+    });
+  });
+
+  it('rejects draft and specific-version selectors before creating a job', async () => {
+    for (const body of [
+      { version: 'working' },
+      { version: 'draft' },
+      { version: 'version:1' },
+      { version: '1.1' },
+      { versionId: '11111111-1111-1111-1111-111111111111' },
+      { sourceVersion: 'live' },
+    ]) {
+      const { svc, prisma, publishing } = make();
+      await expect(
+        svc.startExport('course-1', null, body),
+      ).rejects.toMatchObject({ code: 'VALIDATION_ERROR', httpStatus: 400 });
+      expect(prisma.coursePackageJob.create).not.toHaveBeenCalled();
+      expect(publishing.assertExportable).not.toHaveBeenCalled();
+    }
+  });
+
+  it('keeps the 3-step export gate: an unpublished live version is refused', async () => {
+    const { svc, prisma, publishing } = make();
+    publishing.assertExportable.mockRejectedValue({
+      code: 'EXPORT_REQUIRES_LIVE_VERSION',
+      httpStatus: 409,
+    });
+    await expect(svc.startExport('course-1', null, {})).rejects.toMatchObject({
+      code: 'EXPORT_REQUIRES_LIVE_VERSION',
+    });
+    expect(prisma.coursePackageJob.create).not.toHaveBeenCalled();
   });
 });

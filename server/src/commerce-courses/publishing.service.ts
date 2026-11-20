@@ -496,8 +496,13 @@ export class PublishingService {
         createdBy: true,
       },
     });
+    const names = await employeeNames(
+      this.prisma,
+      versions.map((version) => version.createdBy),
+    );
     return versions.map((version) => ({
       ...version,
+      publishedBy: operatorName(names, version.createdBy),
       isLive: version.id === course.liveVersionId,
     }));
   }

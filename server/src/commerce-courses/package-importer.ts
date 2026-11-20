@@ -23,6 +23,8 @@ export interface ImportOptions {
   onConflict: 'ABORT' | 'CREATE_NEW_COURSE' | 'NEW_VERSION';
   reassignCodes: boolean;
   actorEmployeeId: string | null;
+  /** 上传的原始文件名（PRD §16.3 History 显示）。 */
+  sourceFileName?: string | null;
 }
 
 export class ImportError extends Error {
@@ -127,24 +129,20 @@ export class PackageImporter {
     });
     if (existingByCode) {
       // PRD §9.2 / §16.3：Course ID 已存在时必须拒绝导入；已有课程请使用 Import package。
-      if (
-        options.onConflict === 'ABORT' ||
-        options.onConflict === 'CREATE_NEW_COURSE'
-      ) {
+      // 正常路径由 package-jobs.service 先做冲突判定；这里只处理「确认后、写库前」的竞态。
+      if (options.onConflict === 'ABORT') {
         throw new ImportError(
           'PACKAGE_CONFLICT',
           409,
           `Course ${existingByCode.code} already exists. The Course ID must not already exist in this Admin, or the import is refused.`,
         );
       }
-      // NEW_VERSION 暂未实现，按冲突处理
-      if (options.onConflict === 'NEW_VERSION') {
-        throw new ImportError(
-          'PACKAGE_CONFLICT',
-          409,
-          'NEW_VERSION import not implemented yet.',
-        );
-      }
+      // CREATE_NEW_COURSE / NEW_VERSION 均未实现：按契约返回 422，而不是 409 PACKAGE_CONFLICT。
+      throw new ImportError(
+        'PACKAGE_CONFLICT_STRATEGY_UNSUPPORTED',
+        422,
+        `onConflict=${options.onConflict} is not implemented yet.`,
+      );
     }
     const slugOwner = await this.prisma.commerceCourse.findFirst({
       where: { slug: targetSlug },
@@ -202,6 +200,7 @@ export class PackageImporter {
     manifest: PackageManifest,
     files: Map<string, Buffer>,
     actorEmployeeId: string | null,
+    sourceFileName?: string | null,
   ): Promise<PackageImportResult> {
     const existing = await this.prisma.commerceCourse.findUnique({
       where: { id: courseId },
@@ -325,16 +324,23 @@ export class PackageImporter {
           for (const row of manifest.course.trial.lessons ?? []) {
             const lessonId = lessonIdByCode.get(row.lessonRef);
             if (!lessonId) continue;
+            // Design §17.5：包引用的文本截止点在本课程里找不到时降级 RE_CONFIRM，
+            // 不能假装 READY（管理员需要在试看页重新确认截止点）。
+            const textCutoff = resolveCutoff(
+              row.lessonRef,
+              row.textCutoffLearningPoint,
+            );
+            const status =
+              row.textCutoffLearningPoint && !textCutoff
+                ? 'RE_CONFIRM'
+                : (row.status ?? 'READY');
             await tx.trialSetting.create({
               data: {
                 courseId,
                 lessonId,
                 videoCutoffSeconds: row.videoCutoffSeconds ?? null,
-                textCutoffLearningPointId: resolveCutoff(
-                  row.lessonRef,
-                  row.textCutoffLearningPoint,
-                ),
-                status: (row.status ?? 'READY') as never,
+                textCutoffLearningPointId: textCutoff,
+                status: status as never,
               },
             });
           }
@@ -370,6 +376,7 @@ export class PackageImporter {
             action: HISTORY_ACTIONS.IMPORT_PACKAGE,
             detail: {
               packageId: manifest.packageId,
+              fileName: sourceFileName ?? null,
               sourceEnvironment: manifest.source.environment ?? null,
               sourceVersionLabel: manifest.source.sourceVersion ?? null,
             },
@@ -961,16 +968,22 @@ export class PackageImporter {
       for (const row of course.trial.lessons ?? []) {
         const lessonId = lessonIdByCode.get(row.lessonRef);
         if (!lessonId) continue;
+        // Design §17.5：引用缺失 → RE_CONFIRM（见 importIntoExistingCourse 同款处理）。
+        const textCutoff = resolveTextCutoff(
+          row.lessonRef,
+          row.textCutoffLearningPoint,
+        );
+        const status =
+          row.textCutoffLearningPoint && !textCutoff
+            ? 'RE_CONFIRM'
+            : (row.status ?? 'READY');
         await tx.trialSetting.create({
           data: {
             courseId,
             lessonId,
             videoCutoffSeconds: row.videoCutoffSeconds ?? null,
-            textCutoffLearningPointId: resolveTextCutoff(
-              row.lessonRef,
-              row.textCutoffLearningPoint,
-            ),
-            status: (row.status ?? 'READY') as never,
+            textCutoffLearningPointId: textCutoff,
+            status: status as never,
           },
         });
       }
