@@ -305,6 +305,7 @@ interface InsertSnippetOptions {
   select?: { from: number; to?: number }
   /** 块级片段（表格/公式块/代码块/图片/分割线）：自动断行，避免与相邻文本黏连 */
   block?: boolean
+  continueOnNextLine?: boolean
 }
 
 /**
@@ -331,11 +332,12 @@ export function insertSnippet(view: EditorView, snippet: string, options: Insert
     if (endLine.to > range.to) suffix = '\n'
   }
 
+  if (options.continueOnNextLine) suffix = '\n'
   const insert = prefix + snippet + suffix
   const base = range.from + prefix.length
   const selection = options.select
     ? EditorSelection.range(base + options.select.from, base + (options.select.to ?? options.select.from))
-    : EditorSelection.cursor(base + snippet.length)
+    : EditorSelection.cursor(base + snippet.length + (options.continueOnNextLine ? suffix.length : 0))
 
   view.dispatch({
     changes: { from: range.from, to: range.to, insert },

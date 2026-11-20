@@ -685,6 +685,10 @@
         "image": "Insert image",
         "imageUrl": "External image URL",
         "imageUpload": "Upload from device",
+        "imageChoose": "Choose image",
+        "imageUploadHint": "Maximum {max} {unit} per image. Supports {formats}.",
+        "imageTooLarge": "The image is {size} {unit} and exceeds the {max} {unit} limit.",
+        "imageUploadFailed": "Image upload failed",
         "code": "Insert code block",
         "quote": "Insert quote",
         "divider": "Insert divider"

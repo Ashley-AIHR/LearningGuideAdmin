@@ -296,12 +296,12 @@ function decorate(
       )
       rendered.push(block)
     } else {
-      const parsed = /^!\[([^\]]*)\]\(([\s\S]*)\)$/.exec(block.payload.trim())
+      const parsed = /^!\[((?:\\.|[^\\\]])*)\]\(([\s\S]*)\)$/.exec(block.payload.trim())
       if (!parsed) continue
       const src = parseDestination(parsed[2])
       if (!src) continue
       ranges.push(
-        Decoration.replace({ widget: new ImageWidget(src, parsed[1], true, text, locale), block: true }).range(
+        Decoration.replace({ widget: new ImageWidget(src, parsed[1].replace(/\\([\\[\]])/g, '$1'), true, text, locale), block: true }).range(
           block.from,
           block.to,
         ),

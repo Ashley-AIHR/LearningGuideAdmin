@@ -685,6 +685,10 @@
         "image": "插入图片",
         "imageUrl": "外链图片",
         "imageUpload": "本地上传",
+        "imageChoose": "选择图片",
+        "imageUploadHint": "单张最大 {max} {unit}。支持 {formats}。",
+        "imageTooLarge": "图片大小为 {size} {unit}，超过单张 {max} {unit} 的限制。",
+        "imageUploadFailed": "图片上传失败",
         "code": "插入代码块",
         "quote": "插入引用",
         "divider": "插入分割线"

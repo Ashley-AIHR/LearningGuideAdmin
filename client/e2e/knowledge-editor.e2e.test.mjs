@@ -71,27 +71,38 @@ async function currentMarkdown(page) {
   })
 }
 
-test('both image menus offer URL and upload; local upload loads the saved image', async () => {
+test('right-click image insertion shows the upload limit and renders both images without Enter', async () => {
   const { context, page, errors, uploads } = await open()
-  try {
-    await page.getByRole('button', { name: '图片', exact: true }).click()
-    await page.getByRole('menuitem', { name: '外链图片', exact: true }).waitFor()
-    const fileChooser = page.waitForEvent('filechooser')
-    await page.getByRole('menuitem', { name: '本地上传', exact: true }).click()
-    await (await fileChooser).setFiles({ name: '本地图.png', mimeType: 'image/png', buffer: png })
-    await page.waitForResponse((response) => new URL(response.url()).pathname === '/api/files/images/k1')
-    assert.equal(uploads.length, 1)
-    assert.ok(uploads[0].includes('filename='))
-    await page.getByRole('button', { name: /预览/ }).click()
-    await page.locator(`img[src="${imageUrl}"]`).waitFor()
-    await page.waitForFunction(() => [...document.images].some((img) => img.complete && img.naturalWidth > 0))
-    await page.getByRole('button', { name: 'edit 编辑', exact: true }).click()
+  const openImageMenu = async () => {
     await page.locator('.cm-content').click({ button: 'right', position: { x: 50, y: 15 } })
-    await page.getByRole('menuitem', { name: /插入图片/ }).hover()
-    await page.getByRole('menuitem', { name: '外链图片', exact: true }).waitFor()
-    await page.getByRole('menuitem', { name: '本地上传', exact: true }).waitFor()
+    await page.getByRole('menuitem', { name: /插入图片/ }).click()
+  }
+  try {
+    assert.equal(await page.getByRole('button', { name: '图片', exact: true }).count(), 0)
+    await openImageMenu()
+    await page.getByRole('menuitem', { name: '本地上传', exact: true }).click()
+    const dialog = page.getByRole('dialog')
+    await dialog.getByText(/20 MiB/).waitFor()
+    await page.locator('input[type=file][accept*=".heic"]').setInputFiles({
+      name: 'too-large.png', mimeType: 'image/png', buffer: Buffer.alloc(20 * 1024 ** 2 + 1),
+    })
+    await page.getByText(/超过单张 20 MiB/).waitFor()
+    assert.equal(uploads.length, 0)
+    await page.locator('.ant-modal-confirm').getByRole('button').click()
+    const chooser = page.waitForEvent('filechooser')
+    await dialog.getByRole('button', { name: '选择图片' }).click()
+    await (await chooser).setFiles({ name: '本地图.png', mimeType: 'image/png', buffer: png })
+    await page.locator(`.cm-editor img[src="${imageUrl}"]`).waitFor()
+    assert.equal(uploads.length, 1)
+    await dialog.waitFor({ state: 'hidden' })
+
+    await page.route('https://images.example.test/example.png', (route) => route.fulfill({ body: png, contentType: 'image/png' }))
+    await openImageMenu()
     await page.getByRole('menuitem', { name: '外链图片', exact: true }).click()
-    assert.ok((await currentMarkdown(page)).includes('(https://)'))
+    await dialog.getByRole('textbox', { name: '外链图片' }).fill('https://images.example.test/example.png')
+    await dialog.getByRole('button', { name: /创\s*建/ }).click()
+    await page.locator('.cm-editor img[src="https://images.example.test/example.png"]').waitFor()
+    await page.waitForFunction(() => [...document.querySelectorAll('.cm-editor img')].some((img) => img.complete && img.naturalWidth > 0))
     assert.deepEqual(errors, [])
   } finally { await context.close() }
 })

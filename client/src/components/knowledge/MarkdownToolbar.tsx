@@ -1,5 +1,5 @@
 import { useCallback, useSyncExternalStore } from 'react'
-import { Button, Dropdown, Space, Tooltip } from '../ui'
+import { Button, Space, Tooltip } from '../ui'
 import { syntaxTree } from '@codemirror/language'
 import type { EditorState } from '@codemirror/state'
 import type { EditorView } from '@codemirror/view'
@@ -19,7 +19,6 @@ import { useKText } from './i18n'
 interface Props {
   view: EditorView | null
   disabled?: boolean
-  onInsertImage?: (source: 'url' | 'upload') => void
 }
 
 interface ActiveState {
@@ -68,7 +67,7 @@ function computeActive(state: EditorState): ActiveState {
   }
 }
 
-export function MarkdownToolbar({ view, disabled, onInsertImage }: Props) {
+export function MarkdownToolbar({ view, disabled }: Props) {
   const { text } = useKText()
 
   // 选区/光标变化时刷新高亮（CM6 无 React 状态，这里用原生事件兜住）
@@ -163,21 +162,6 @@ export function MarkdownToolbar({ view, disabled, onInsertImage }: Props) {
             insertSnippet(view, `[${linkText}](https://)`, { select: { from: 1, to: 1 + linkText.length } })
           },
         )}
-        <Dropdown
-          trigger={['click']}
-          disabled={disabled || !view}
-          menu={{
-            items: [
-              { key: 'url', label: text('editor.insert.imageUrl') },
-              { key: 'upload', label: text('editor.insert.imageUpload') },
-            ],
-            onClick: ({ key }) => onInsertImage?.(key as 'url' | 'upload'),
-          }}
-        >
-          <Button size="small" type="text" disabled={disabled || !view} title={text('toolbar.image')}>
-            {text('toolbar.imageLabel')}
-          </Button>
-        </Dropdown>
       </Space>
       <Space size={2}>
         {btn('•', text('toolbar.bullet'), active.bullet, () => view && toggleLinePrefix(view, () => '- ', /^(\s*)([-*+])(\s)/))}

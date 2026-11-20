@@ -35,16 +35,10 @@ for (const marker of ['**', '*', '~~', '`', '$']) {
   })
 }
 
-test('toolbar image menu offers both external URL and local upload', async () => {
-  const choices: string[] = []
+test('the formatting toolbar has no image insert button', () => {
   const editor = { dom: document.createElement('div'), state: EditorState.create() } as EditorView
-  render(<MemoryRouter><MarkdownToolbar view={editor} onInsertImage={(choice) => choices.push(choice)} /></MemoryRouter>)
-  fireEvent.click(screen.getByRole('button', { name: 'Image' }))
-  fireEvent.click(await screen.findByText('External image URL'))
-  assert.deepEqual(choices, ['url'])
-  fireEvent.click(screen.getByRole('button', { name: 'Image' }))
-  fireEvent.click(await screen.findByText('Upload from device'))
-  assert.deepEqual(choices, ['url', 'upload'])
+  render(<MemoryRouter><MarkdownToolbar view={editor} /></MemoryRouter>)
+  assert.ok(!screen.queryByRole('button', { name: 'Image' }))
 })
 
 const image = '/api/files/images/course/diagram.png'

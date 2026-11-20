@@ -15,6 +15,10 @@ import WordExtractor from 'word-extractor';
 import { latexToMarkdown } from './latex-to-markdown';
 import { CourseStorageService } from '../commerce-courses/storage.service';
 import { PrismaService } from '../prisma/prisma.service';
+import {
+  MAX_IMAGE_UPLOAD_BYTES,
+  prepareKnowledgeImage,
+} from './knowledge-image';
 
 /**
  * §10.1 白名单。
@@ -75,11 +79,11 @@ export class FilesService implements OnModuleInit, OnModuleDestroy {
   }
 
   async storeImage(courseId: string, file: Express.Multer.File) {
-    if (file.size > 5 * 1024 * 1024)
-      throw new BadRequestException('图片不能超过 5MB');
-    const detected = this.detectImage(file.buffer);
-    if (!detected)
-      throw new BadRequestException('仅支持 PNG、JPEG、GIF、WebP 图片');
+    if (
+      file.size > MAX_IMAGE_UPLOAD_BYTES ||
+      file.buffer.length > MAX_IMAGE_UPLOAD_BYTES
+    )
+      throw new BadRequestException('图片不能超过 20 MiB');
     if (
       !(await this.prisma.course.findUnique({
         where: { id: courseId },
@@ -87,16 +91,10 @@ export class FilesService implements OnModuleInit, OnModuleDestroy {
       }))
     )
       throw new BadRequestException('课程不存在');
+    const { bytes, extension } = await prepareKnowledgeImage(file.buffer);
     const assetId = randomUUID();
-    await this.saveImageAsset(
-      courseId,
-      assetId,
-      detected.extension,
-      file.buffer,
-    );
-    return {
-      url: `/api/files/images/${courseId}/${assetId}.${detected.extension}`,
-    };
+    await this.saveImageAsset(courseId, assetId, extension, bytes);
+    return { url: `/api/files/images/${courseId}/${assetId}.${extension}` };
   }
 
   private async saveImageAsset(
