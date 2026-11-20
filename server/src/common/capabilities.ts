@@ -22,7 +22,9 @@ export const CAPABILITY_IDS = [
   'operations', // 运营位：/api/backoffice/operations
   'reporting', // 报表：上游仅前端占位菜单，没有后端路由
   'order', // 订单：上游仅前端占位菜单，没有后端路由
-  'settings', // 设置：员工账号（/api/admin/employees）与学习权限（/api/learning-access）
+  'settings', // 设置：学习权限（/api/learning-access）与其余 /api/admin/**
+  'accounts', // 员工账号管理（/api/admin/employees/**）：owner 2026-11-20 从 settings 拆出，
+  // 账号级功能权限也挂在这里；sandbox 只开 course,accounts，不暴露其它 Settings
 ] as const;
 
 export type CapabilityId = (typeof CAPABILITY_IDS)[number];
@@ -87,7 +89,9 @@ const GOVERNED_PREFIXES: readonly GovernedPrefix[] = [
   { segments: ['helpdesk'], capabilities: ['helpdesk'] },
   // 学员管理
   { segments: ['students'], capabilities: ['students'] },
-  // 设置：员工账号管理与学习权限
+  // 员工账号管理（独立能力 accounts）：必须先于通用 /api/admin 前缀匹配
+  { segments: ['admin', 'employees'], capabilities: ['accounts'] },
+  // 其余设置：学习权限；/api/admin/** 的其它接口仍归 settings
   { segments: ['admin'], capabilities: ['settings'] },
   { segments: ['learning-access'], capabilities: ['settings'] },
   // AI Tutor 与学员端运行时

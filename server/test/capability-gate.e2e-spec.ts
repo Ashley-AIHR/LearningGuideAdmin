@@ -33,6 +33,22 @@ class FakeHelpdeskController {
   }
 }
 
+@Controller('admin/employees')
+class FakeAdminEmployeesController {
+  @Get()
+  list() {
+    return [{ id: 'e1' }];
+  }
+}
+
+@Controller('learning-access')
+class FakeLearningAccessController {
+  @Get()
+  get() {
+    return { enabled: true };
+  }
+}
+
 @Controller('health')
 class FakeHealthController {
   @Get()
@@ -46,6 +62,8 @@ async function createApp(raw: string | undefined): Promise<INestApplication> {
     controllers: [
       FakeCoursesController,
       FakeHelpdeskController,
+      FakeAdminEmployeesController,
+      FakeLearningAccessController,
       FakeHealthController,
     ],
     providers: [
@@ -112,6 +130,35 @@ describe('模块能力门（ADMIN_CAPABILITIES）HTTP 行为', () => {
         message: 'This module is not enabled in this environment',
       },
     });
+  });
+
+  it('accounts 是独立能力：course,accounts 放行员工账号，但不放行其余 Settings', async () => {
+    app = await createApp('course,accounts');
+    const employees = await request(serverOf(app)).get('/api/admin/employees');
+    expect(employees.status).toBe(200);
+    expect(employees.body.data).toEqual([{ id: 'e1' }]);
+
+    const learningAccess = await request(serverOf(app)).get(
+      '/api/learning-access',
+    );
+    expect(learningAccess.status).toBe(404);
+    expect(learningAccess.body.error?.code).toBe('MODULE_NOT_ENABLED');
+
+    // 账号管理不再被 settings 能力覆盖
+    await app.close();
+    app = await createApp('course');
+    const blocked = await request(serverOf(app)).get('/api/admin/employees');
+    expect(blocked.status).toBe(404);
+    expect(blocked.body.error?.code).toBe('MODULE_NOT_ENABLED');
+
+    await app.close();
+    app = await createApp('settings');
+    expect(
+      (await request(serverOf(app)).get('/api/learning-access')).status,
+    ).toBe(200);
+    expect(
+      (await request(serverOf(app)).get('/api/admin/employees')).status,
+    ).toBe(404);
   });
 
   it('未配置 ADMIN_CAPABILITIES：全部模块照旧可访问', async () => {

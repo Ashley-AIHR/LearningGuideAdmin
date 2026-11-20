@@ -132,6 +132,33 @@ describe('能力门：路径前缀 → 能力映射表', () => {
     }
   });
 
+  it('accounts 是独立能力：员工账号管理归 accounts，不再归 settings', () => {
+    expect(capabilityForPath('/api/admin/employees')).toEqual(['accounts']);
+    expect(capabilityForPath('/API/Admin/Employees/abc/features')).toEqual([
+      'accounts',
+    ]);
+    expect(capabilityForPath('/api/admin/other')).toEqual(['settings']);
+    expect(capabilityForPath('/api/learning-access')).toEqual(['settings']);
+
+    const accountsOnly = parseEnabledCapabilities('accounts');
+    expect(capabilityGateAllows('/api/admin/employees', accountsOnly)).toBe(true);
+    expect(capabilityGateAllows('/api/learning-access', accountsOnly)).toBe(
+      false,
+    );
+
+    const settingsOnly = parseEnabledCapabilities('settings');
+    expect(capabilityGateAllows('/api/learning-access', settingsOnly)).toBe(
+      true,
+    );
+    expect(capabilityGateAllows('/api/admin/employees', settingsOnly)).toBe(
+      false,
+    );
+
+    const sandbox = parseEnabledCapabilities('course,accounts');
+    expect(capabilityGateAllows('/api/admin/employees', sandbox)).toBe(true);
+    expect(capabilityGateAllows('/api/learning-access', sandbox)).toBe(false);
+  });
+
   it('共享前缀（courses / releases）只要任一所属能力启用就放行', () => {
     const aiOnly = parseEnabledCapabilities('ai');
     expect(capabilityForPath('/api/courses')).toEqual(['knowledge', 'ai']);
