@@ -46,9 +46,12 @@ function renderEditor(detail: CourseDetail): FakeServer {
 }
 
 function basics(detail: CourseDetail) {
+  const tab = screen.getByRole('button', { name: /Course Information/ })
   return {
     chip: screen.getByTestId('info-complete').textContent?.trim(),
-    tab: screen.getByRole('button', { name: /Course Information/ }).textContent?.trim(),
+    // 新布局把完成标记放在 tab 内的 .course-ui-tabMark 上（aria-label/title）；
+    // 断言意图不变：标记必须反映服务端的 complete 判定。
+    tab: tab.querySelector('.course-ui-tabMark')?.getAttribute('aria-label')?.trim(),
     step: detail.completeness.steps.courseInformation.complete,
   }
 }
