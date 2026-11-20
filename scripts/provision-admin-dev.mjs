@@ -43,12 +43,13 @@ function optional(service, operation, input) {
   catch (error) { if (/ResourceNotFound|NoSuchEntity|DBInstanceNotFound|DBSubnetGroupNotFound/i.test(String(error.stderr))) return null; throw error; }
 }
 
-// Sandbox 能力分区缺省（owner 2026-11-16 拍板、2026-11-19 修订）：只起 admin 角色，
-// 服务端/前端只开放课程管理（ADMIN_CAPABILITIES=course）；环境标识与版本编号显式写死为
-// Sandbox 语义，避免依赖编号模式的静默推导。dev/sit/uat 保持历史行为（不写这四项）。
+// Sandbox 能力分区缺省（owner 2026-11-16 拍板、2026-11-20 修订）：只起 admin 角色，
+// 服务端/前端只开放课程管理与后台账号管理（ADMIN_CAPABILITIES=course,accounts）；
+// 环境标识与版本编号显式写死为 Sandbox 语义，避免依赖编号模式的静默推导。
+// dev/sit/uat 保持历史行为（不写这四项）。
 const sandboxEnvironmentDefaults = {
   APP_ROLES: "admin",
-  ADMIN_CAPABILITIES: "course",
+  ADMIN_CAPABILITIES: "course,accounts",
   ENVIRONMENT_LABEL: "Sandbox",
   VERSION_NUMBERING_MODE: "sandbox"
 };

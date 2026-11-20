@@ -9,7 +9,7 @@
 flowchart LR
   subgraph CFG["配置命名空间（同一套代码，仅配置不同）"]
     E1["APP_ENV=SANDBOX<br/>VERSION_NUMBERING_MODE=sandbox<br/>ENVIRONMENT_LABEL=Sandbox"]
-    E2["APP_ROLES=admin<br/>ADMIN_CAPABILITIES=course<br/>（只开放课程管理）"]
+    E2["APP_ROLES=admin<br/>ADMIN_CAPABILITIES=course,accounts<br/>（课程管理 + 账号管理）"]
     E3["ENV_CAPABILITY_ENFORCEMENT=off<br/>PACKAGE_SOURCE_ENFORCEMENT=off（Part C，未接线）"]
   end
 
@@ -101,7 +101,7 @@ Secrets  learning-guide/<admin/|>sandbox/<snake_case 键名>
 
 ### 5.1 模块能力门（已实现：`ADMIN_CAPABILITIES`）
 
-- 单一环境变量 `ADMIN_CAPABILITIES`（逗号分隔的能力标识）：**未配置/空 = 全部启用**（dev/sit/uat/prod 行为零变化）；Sandbox 配置 `ADMIN_CAPABILITIES=course`。
+- 单一环境变量 `ADMIN_CAPABILITIES`（逗号分隔的能力标识）：**未配置/空 = 全部启用**（dev/sit/uat/prod 行为零变化）；Sandbox 配置 `ADMIN_CAPABILITIES=course,accounts`。
 - 服务端：前缀→能力映射集中在 `server/src/common/capabilities.ts`；未启用能力的 API 前缀返回 404 + 既有信封 `{success:false,error:{code:'MODULE_NOT_ENABLED'}}`。豁免：`/api/health`、`/api/auth/**`、`/api/session`、`/api/preferences/**`、`/api/backoffice/environment`、非 `/api` 资源。
 - 前端：菜单 = 角色权限（RBAC 继续生效）∩ 已启用能力；被禁用路由重定向到可用落点（沙箱只剩 `course`）。
 - **无环境专属分支**：逻辑只依赖 `ADMIN_CAPABILITIES` 的值，不判断 `APP_ENV`。未知能力值启动即失败（fail-fast）。
@@ -109,8 +109,9 @@ Secrets  learning-guide/<admin/|>sandbox/<snake_case 键名>
 | 能力 | 覆盖 | Sandbox |
 |---|---|---|
 | `course` | `/api/backoffice/courses/**`、`/api/portal/v1/**`（课程投影与媒体） | **开** |
+| `accounts` | `/api/admin/employees/**`、Settings › Employee Account（含账号级功能开关） | **开** |
 | `knowledge` / `ai` / `students` / `helpdesk` / `operations` / `reporting` / `order` | 对应模块与路由 | 关（404 + 菜单隐藏） |
-| `settings` | 员工账号、学习权限 | 首期关（账号由部署引导创建；若运营需要自助改密，部署时改为 `course,settings`） |
+| `settings` | 学习权限与其它 Settings 子项（支付/通知等） | 关（`accounts` 不打开 `settings`） |
 
 角色层仍按原设计降级：`APP_ROLES=admin`；`agent`/`ks` 等角色不启用，对应变量不写入 sandbox 配置（见第三部分模板）。能力门与角色是两层：角色决定"起哪些服务"，能力门决定"暴露哪些模块"。
 
@@ -157,5 +158,5 @@ Secrets  learning-guide/<admin/|>sandbox/<snake_case 键名>
 | 域名/Cookie | 会话 Cookie host-only；其它域不生效 |
 | Stripe | `livemode=false`；无 `sk_live_` |
 | 版本编号 | 发布 `1.1` → `1.2`；导出后再发布 `2.1` |
-| 能力分区 | `ADMIN_CAPABILITIES=course`：菜单只剩 Course；`/api/backoffice/helpdesk/**` 等返回 404 `MODULE_NOT_ENABLED`；不配置时全部放行（dev/uat 回归） |
+| 能力分区 | `ADMIN_CAPABILITIES=course,accounts`：菜单只剩 Course 与 Settings›Employee Account；`/api/backoffice/helpdesk/**` 等返回 404 `MODULE_NOT_ENABLED`；不配置时全部放行（dev/uat 回归） |
 | 分支契约 | `git rev-parse sandbox` 与最近一次生产发布（UAT）部署 SHA 一致；CI 通过后工作流发布 |
