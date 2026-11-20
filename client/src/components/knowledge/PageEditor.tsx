@@ -2,12 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Alert, App, Button, Dropdown, Empty, Input, Modal, Panel, Tag } from '../ui'
 import type { MenuProps } from '../ui'
 import { EditOutlined, EyeOutlined } from '@ant-design/icons'
-import MDEditor from '@uiw/react-md-editor'
-import remarkMath from 'remark-math'
-import remarkGfm from 'remark-gfm'
-import rehypeKatex from 'rehype-katex'
-import rehypeRaw from 'rehype-raw'
-import 'katex/dist/katex.min.css'
+import { KnowledgeMarkdown } from './KnowledgeMarkdown'
 import type { EditorView } from '@codemirror/view'
 import { EditorSelection } from '@codemirror/state'
 import { clearLocalDraft, localDraftKey, registerDraftFlusher, useKnowledgeStore } from '../../stores/knowledgeStore'
@@ -32,34 +27,6 @@ import { extractWikiSources } from './wikiSources'
  *  - 跨块选中、撤销/重做、查找都是 CM6 免费能力。
  * 标题栏右侧提供「预览」按钮，用与 Portal 相同的渲染器（remark-math + rehype-katex）展示效果。
  */
-
-/** 与 AI Tutor / Portal 一致的 Markdown+KaTeX 渲染插件 */
-function sanitizeHtml() {
-  const tags = new Set(['div', 'table', 'thead', 'tbody', 'tfoot', 'tr', 'th', 'td', 'p', 'br', 'ul', 'ol', 'li', 'strong', 'em', 'b', 'i', 'img'])
-  const attrs = new Set(['className', 'colSpan', 'rowSpan', 'alt', 'src'])
-  return (tree: { children?: unknown[] }) => {
-    const clean = (node: unknown): unknown[] => {
-      if (!node || typeof node !== 'object') return []
-      const item = node as { type?: string; tagName?: string; properties?: Record<string, unknown>; children?: unknown[] }
-      if (item.type === 'element') {
-        if (!tags.has(item.tagName ?? '')) return []
-        item.properties = Object.fromEntries(Object.entries(item.properties ?? {}).filter(([key]) => attrs.has(key)))
-        if (item.tagName === 'img') {
-          const src = String(item.properties?.src ?? '')
-          if (!/^(https?:\/\/|\/api\/files\/images\/)/i.test(src)) return []
-        }
-      }
-      if (item.children) item.children = item.children.flatMap(clean)
-      return [item]
-    }
-    if (tree.children) tree.children = tree.children.flatMap(clean)
-  }
-}
-
-const katexPlugins = {
-  remarkPlugins: [remarkGfm, remarkMath],
-  rehypePlugins: [rehypeRaw, sanitizeHtml, rehypeKatex],
-}
 
 /** 浏览器刷新/关闭页面时的本地草稿兜底 key（与 store 共用，保持单一 key 规则） */
 interface LocalDraft {
@@ -340,7 +307,10 @@ export function PageEditor() {
     { key: 'table',     icon: sym('⊞'), label: text('editor.insert.table') },
     { key: 'mathBlock', icon: sym('∑'), label: text('editor.insert.mathBlock') },
     { key: 'inlineMath',icon: sym('ƒ'), label: text('editor.insert.inlineMath') },
-    { key: 'image',     icon: sym('🖼'), label: text('editor.insert.image') },
+    { key: 'image', icon: sym('🖼'), label: text('editor.insert.image'), children: [
+      { key: 'imageUrl', label: text('editor.insert.imageUrl') },
+      { key: 'imageUpload', label: text('editor.insert.imageUpload') },
+    ] },
     { key: 'code',      icon: sym('⌨'), label: text('editor.insert.code') },
     { key: 'quote',     icon: sym('❝'), label: text('editor.insert.quote') },
     { key: 'divider',   icon: sym('―'), label: text('editor.insert.divider') },
@@ -356,6 +326,15 @@ export function PageEditor() {
     return [header, sep, ...body].join('\n')
   }
 
+  const insertImage = (source: 'url' | 'upload') => {
+    if (source === 'upload') {
+      imageInputRef.current?.click()
+    } else {
+      const alt = text('editor.snippet.toolbarImageAlt')
+      insertWithSelection(`![${alt}](https://)`, 'https://')
+    }
+  }
+
   const onInsertMenuClick: MenuProps['onClick'] = ({ key }) => {
     const target = viewRef.current
     if (!target) return
@@ -369,8 +348,10 @@ export function PageEditor() {
     } else if (key === 'inlineMath') {
       // 行内片段：不补空行，插入 `$x$` 并选中 x
       insertSnippet(target, '$x$', { select: { from: 1, to: 2 } })
-    } else if (key === 'image') {
-      imageInputRef.current?.click()
+    } else if (key === 'imageUrl') {
+      insertImage('url')
+    } else if (key === 'imageUpload') {
+      insertImage('upload')
     } else if (key === 'code') {
       insertWithSelection(`\`\`\`\n${text('editor.snippet.code')}\n\`\`\``, text('editor.snippet.code'))
     } else if (key === 'quote') {
@@ -510,18 +491,14 @@ export function PageEditor() {
             padding: `${tokens.spacing.md}px ${tokens.spacing.lg}px`,
           }}
         >
-          <MDEditor.Markdown
-            source={draft.contentMd}
-            {...katexPlugins}
-            style={{ background: 'transparent', fontSize: tokens.fontSize.xl }}
-          />
+          <KnowledgeMarkdown source={draft.contentMd} />
         </div>
       ) : (
         <div style={{ ...borderStyle, flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
           {/* 常驻格式工具条（M1）：选中时高亮当前格式，点击即包裹选区 / 切换行前缀 */}
           {access.canEdit && (
             <div style={{ padding: `0 ${tokens.spacing.sm}px` }}>
-              <MarkdownToolbar view={view} />
+              <MarkdownToolbar view={view} onInsertImage={insertImage} />
             </div>
           )}
           <div style={{ flex: 1, minHeight: 0 }}>

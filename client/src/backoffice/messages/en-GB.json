@@ -565,6 +565,8 @@
         "mathBlock": "Insert math block",
         "inlineMath": "Insert inline math",
         "image": "Insert image",
+        "imageUrl": "External image URL",
+        "imageUpload": "Upload from device",
         "code": "Insert code block",
         "quote": "Insert quote",
         "divider": "Insert divider"
@@ -603,13 +605,14 @@
       "inlineMath": "Inline math $…$ (wraps selection if any)",
       "link": "Insert link [text](url)",
       "linkLabel": "Link",
-      "image": "Insert external image ![alt](image URL)",
+      "image": "Insert image",
       "imageLabel": "Image",
       "bullet": "Bulleted list",
       "ordered": "Numbered list",
       "quote": "Quote"
     },
     "table": {
+      "editSource": "Edit table source",
       "imageFailed": "Image failed to load: {src}",
       "addRow": "+ Row",
       "addRowTitle": "Insert a row below current",

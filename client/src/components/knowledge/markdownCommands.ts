@@ -158,11 +158,18 @@ export function toggleWrap(view: EditorView, before: string, after: string = bef
   // 1) 先按主选区判定是否要「剥离」（整张表/格式节点只剥一次，避免多选区重复剥离同一节点）
   let strip: { from: number; to: number; innerFrom: number; innerTo: number } | null = null
 
+  // 空标记不生成 Markdown 语法节点，但再次点击仍应撤销刚插入的格式。
+  if (main.empty && main.from >= beforeLen && main.to + afterLen <= state.doc.length &&
+    state.sliceDoc(main.from - beforeLen, main.from) === before &&
+    state.sliceDoc(main.to, main.to + afterLen) === after) {
+    strip = { from: main.from - beforeLen, to: main.to + afterLen, innerFrom: main.from, innerTo: main.to }
+  }
+
   const nodeName = MARKER_NODES[before]
-  if (nodeName) {
+  if (!strip && nodeName) {
     const n = findContainingNode(state, main.from, main.to, nodeName, beforeLen, afterLen)
     if (n) strip = { from: n.from, to: n.to, innerFrom: n.from + beforeLen, innerTo: n.to - afterLen }
-  } else if (before === '$') {
+  } else if (!strip && before === '$') {
     const n = findContainingMath(state, main.from, main.to)
     if (n) strip = { from: n.from, to: n.to, innerFrom: n.from + 1, innerTo: n.to - 1 }
   }

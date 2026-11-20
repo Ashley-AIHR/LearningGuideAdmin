@@ -3,6 +3,15 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as XLSX from 'xlsx';
 import JSZip from 'jszip';
+import {
+  Document,
+  ImageRun,
+  Packer,
+  Paragraph,
+  Table,
+  TableCell,
+  TableRow,
+} from 'docx';
 import { FilesService, ALLOWED_EXTENSIONS } from './files.service';
 
 /**
@@ -318,34 +327,83 @@ ODE & Ordinary differential equation
     ).rejects.toThrow('DOCX 解压内容超过安全限制');
   });
 
-  it('DOCX 转换生成的内嵌图片 data URI 会替换为持久化图片地址', async () => {
-    const png = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 1]);
-    const zip = new JSZip();
-    zip.file(
-      'word/document.xml',
-      '<w:document><a:blip r:embed="rId1"/></w:document>',
+  const docxWithImages = async () => {
+    const png = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=',
+      'base64',
     );
-    zip.file(
-      'word/_rels/document.xml.rels',
-      '<Relationships><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/image1.png"/></Relationships>',
+    const picture = () =>
+      new ImageRun({
+        type: 'png',
+        data: png,
+        transformation: { width: 10, height: 10 },
+      });
+    return Packer.toBuffer(
+      new Document({
+        sections: [
+          {
+            children: [
+              new Paragraph({ children: [picture()] }),
+              new Table({
+                rows: [
+                  new TableRow({
+                    children: [
+                      new TableCell({
+                        children: [
+                          new Paragraph('阅读时间：'),
+                          new Paragraph({
+                            children: [picture(), picture()],
+                            bullet: { level: 0 },
+                          }),
+                        ],
+                      }),
+                      new TableCell({
+                        children: [new Paragraph('第21回：唐僧渡过沙河。')],
+                      }),
+                    ],
+                  }),
+                ],
+              }),
+            ],
+          },
+        ],
+      }),
     );
-    zip.file('word/media/image1.png', png);
-    const converter = service as unknown as {
-      persistEmbeddedImages: (
-        markdown: string,
-        docx: Buffer,
-        courseId: string,
-      ) => Promise<string>;
-    };
-    const converted = await converter.persistEmbeddedImages(
-      '![diagram](data:image/png;base64...)',
-      await zip.generateAsync({ type: 'nodebuffer' }),
+  };
+
+  it('DOCX 中文与复杂表格保留，表格内外每张图片均替换为可预览的持久化地址', async () => {
+    const result = await service.convertFile(
+      mkFile('阅读任务.docx', await docxWithImages()),
       'course-1',
     );
-    expect(converted).toMatch(
-      /^!\[diagram\]\(\/api\/files\/images\/course-1\/[0-9a-f-]+\.png\)$/,
+    expect(result.title).toBe('阅读任务');
+    expect(result.markdown).toContain('阅读时间：');
+    expect(result.markdown).toContain('第21回：唐僧渡过沙河。');
+    expect(result.markdown).toContain('<table>');
+    const urls = result.markdown.match(
+      /\/api\/files\/images\/course-1\/[0-9a-f-]+\.png/g,
     );
-    expect(storage.putMedia).toHaveBeenCalledTimes(1);
+    expect(urls).toHaveLength(3);
+    expect(result.markdown).not.toContain('data:image');
+    expect(result.markdown).not.toContain('/knowledge-import-images/');
+    expect(storage.putMedia).toHaveBeenCalledTimes(3);
+  });
+
+  it('含图片 DOCX 没有课程时拒绝导入，不写入图片文件', async () => {
+    await expect(
+      service.convertFile(mkFile('images.docx', await docxWithImages())),
+    ).rejects.toThrow('DOCX 含图片，请从 Knowledge Pages 课程中导入');
+    expect(storage.putMedia).not.toHaveBeenCalled();
+  });
+
+  it('DOCX 图片存储失败时拒绝导入，不返回缺图文档', async () => {
+    storage.putMedia.mockRejectedValueOnce(new Error('storage unavailable'));
+    await expect(
+      service.convertFile(
+        mkFile('images.docx', await docxWithImages()),
+        'course-1',
+      ),
+    ).rejects.toThrow('文档转换失败');
   });
 
   it('无扩展名、空 buffer 或 undefined 应 400', async () => {

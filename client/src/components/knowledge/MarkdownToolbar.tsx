@@ -1,5 +1,5 @@
 import { useCallback, useSyncExternalStore } from 'react'
-import { Button, Space, Tooltip } from '../ui'
+import { Button, Dropdown, Space, Tooltip } from '../ui'
 import { syntaxTree } from '@codemirror/language'
 import type { EditorState } from '@codemirror/state'
 import type { EditorView } from '@codemirror/view'
@@ -19,6 +19,7 @@ import { useKText } from './i18n'
 interface Props {
   view: EditorView | null
   disabled?: boolean
+  onInsertImage?: (source: 'url' | 'upload') => void
 }
 
 interface ActiveState {
@@ -67,7 +68,7 @@ function computeActive(state: EditorState): ActiveState {
   }
 }
 
-export function MarkdownToolbar({ view, disabled }: Props) {
+export function MarkdownToolbar({ view, disabled, onInsertImage }: Props) {
   const { text } = useKText()
 
   // 选区/光标变化时刷新高亮（CM6 无 React 状态，这里用原生事件兜住）
@@ -150,12 +151,7 @@ export function MarkdownToolbar({ view, disabled }: Props) {
       <Space size={2}>
         {btn('$x$', text('toolbar.inlineMath'), false, () => {
           if (!view) return
-          // 有选区 → toggle $…$；无选区 → 插入占位 $x$ 并选中 x（避免产生空公式 `$$`）
-          if (view.state.selection.main.empty) {
-            insertSnippet(view, '$x$', { select: { from: 1, to: 2 } })
-          } else {
-            toggleWrap(view, '$')
-          }
+          toggleWrap(view, '$')
         })}
         {btn(
           text('toolbar.linkLabel'),
@@ -167,18 +163,21 @@ export function MarkdownToolbar({ view, disabled }: Props) {
             insertSnippet(view, `[${linkText}](https://)`, { select: { from: 1, to: 1 + linkText.length } })
           },
         )}
-        {btn(
-          text('toolbar.imageLabel'),
-          text('toolbar.image'),
-          false,
-          // 编辑器换成 Markdown 后保留「外链 URL 插图」入口（BUG-0224）；选中 URL 占位便于直接粘贴
-          () => {
-            if (!view) return
-            const alt = text('editor.snippet.toolbarImageAlt')
-            const urlFrom = 4 + alt.length
-            insertSnippet(view, `![${alt}](https://)`, { block: true, select: { from: urlFrom, to: urlFrom + 8 } })
-          },
-        )}
+        <Dropdown
+          trigger={['click']}
+          disabled={disabled || !view}
+          menu={{
+            items: [
+              { key: 'url', label: text('editor.insert.imageUrl') },
+              { key: 'upload', label: text('editor.insert.imageUpload') },
+            ],
+            onClick: ({ key }) => onInsertImage?.(key as 'url' | 'upload'),
+          }}
+        >
+          <Button size="small" type="text" disabled={disabled || !view} title={text('toolbar.image')}>
+            {text('toolbar.imageLabel')}
+          </Button>
+        </Dropdown>
       </Space>
       <Space size={2}>
         {btn('•', text('toolbar.bullet'), active.bullet, () => view && toggleLinePrefix(view, () => '- ', /^(\s*)([-*+])(\s)/))}
