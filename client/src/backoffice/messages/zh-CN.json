@@ -722,6 +722,12 @@
         "mathBlock": "插入公式块",
         "inlineMath": "插入行内公式",
         "image": "插入图片",
+        "imageUrl": "外链图片",
+        "imageUpload": "本地上传",
+        "imageChoose": "选择图片",
+        "imageUploadHint": "单张最大 {max} {unit}。支持 {formats}。",
+        "imageTooLarge": "图片大小为 {size} {unit}，超过单张 {max} {unit} 的限制。",
+        "imageUploadFailed": "图片上传失败",
         "code": "插入代码块",
         "quote": "插入引用",
         "divider": "插入分割线"
@@ -760,13 +766,14 @@
       "inlineMath": "行内公式 $…$（有选区则切换包裹）",
       "link": "插入链接 [文字](url)",
       "linkLabel": "链接",
-      "image": "插入外链图片 ![说明](图片 URL)",
+      "image": "插入图片",
       "imageLabel": "图片",
       "bullet": "无序列表",
       "ordered": "有序列表",
       "quote": "引用"
     },
     "table": {
+      "editSource": "编辑表格源码",
       "imageFailed": "图片加载失败：{src}",
       "addRow": "＋行",
       "addRowTitle": "在当前行下方插入一行",
