@@ -14,7 +14,7 @@ import { UnderstandingPanel } from './UnderstandingPanel';
 import { ExhibitDrawer } from './ExhibitDrawer';
 import { TextEditor } from './TextEditor';
 import { Chip, Field, IssueText, Modal, TypedTimeInput } from './shared';
-import { L, buttonStyle, card, dangerBtn, exhibitTypeLabel, fmtTimeInput, inputStyle, labelStyle, languageLabel, localizeMissing, fmtDuration, fmtDate, primaryBtn, readingTypeLabel } from './shared-utils';
+import { L, buttonStyle, card, dangerBtn, exhibitTypeLabel, fmtTimeInput, inputStyle, labelStyle, languageLabel, localizeMissing, fmtDuration, fmtDate, primaryBtn, readingTypeLabel, useNarrowLayout } from './shared-utils';
 import type { Locale } from '../../lib/i18n/config';
 import { serverText } from '../../lib/i18n/serverText';
 
@@ -551,9 +551,21 @@ export function CourseContentSection({
     videoUpload?.phase === 'processing' ||
     videoUpload?.phase === 'assigning';
 
+  const narrow = useNarrowLayout();
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: '280px 1fr', gap: 20, marginTop: 18 }}>
-      <aside style={{ ...card, marginTop: 0, padding: 14 }}>
+    <>
+    <div
+      data-testid="content-root"
+      style={{
+        height: '100%',
+        minHeight: 0,
+        display: 'grid',
+        gridTemplateColumns: narrow ? 'minmax(0, 1fr)' : '280px minmax(0, 1fr)',
+        gridTemplateRows: narrow ? 'minmax(0, 220px) minmax(0, 1fr)' : 'minmax(0, 1fr)',
+        gap: 16,
+      }}
+    >
+      <aside data-testid="content-lessons" data-panel="content-lessons" style={{ ...card, marginTop: 0, padding: 14, overflow: 'auto', minWidth: 0, minHeight: 0 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, gap: 8 }}>
           <h3 style={{ margin: 0, fontSize: 15 }}>{L(locale, '课时', 'Lessons')}</h3>
           <div style={{ display: 'flex', gap: 6 }}>
@@ -587,7 +599,7 @@ export function CourseContentSection({
       </aside>
 
       {activeLesson ? (
-        <div>
+        <div data-testid="content-detail" data-panel="content-detail" style={{ overflow: 'auto', minWidth: 0, minHeight: 0 }}>
           <div style={{ ...card, marginTop: 0, padding: 16 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
               <div>
@@ -620,7 +632,7 @@ export function CourseContentSection({
 
           <div style={{ ...card, marginTop: 14, padding: 16 }}>
             <h3 style={{ margin: 0, fontSize: 16 }}>{L(locale, '课时信息', 'Lesson info')}</h3>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginTop: 10 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: 16, marginTop: 10 }}>
               <div>
                 <label style={labelStyle}>{L(locale, '英文', 'English')}</label>
                 <Field label={L(locale, '课时 ID', 'Lesson ID')} hint={t(locale as Locale, 'course.ui.lessonIdFixed')}><input data-testid="lesson-id" readOnly aria-readonly="true" value={activeLesson.code} style={{ ...inputStyle, background: '#F5F7FA' }} /></Field>
@@ -876,7 +888,7 @@ export function CourseContentSection({
                         const timeIssue = point.code ? lessonLine(`videoLearningPoints[${point.code}].timeSeconds`) : null;
                         const rowError = rowErrors.points[index] ?? null;
                         return (
-                          <div key={point.id ?? `new-${index}`} data-testid="point-row" style={{ display: 'grid', gridTemplateColumns: '70px 1fr 110px 40px', gap: 8, marginTop: 8, alignItems: 'center' }}>
+                          <div key={point.id ?? `new-${index}`} data-testid="point-row" style={{ display: 'grid', gridTemplateColumns: '70px minmax(0, 1fr) 110px 40px', gap: 8, marginTop: 8, alignItems: 'center' }}>
                             <span style={{ fontSize: 12, color: '#5A6577' }}>{point.code ?? `${activeLesson.sortOrder}.${index + 1}`}</span>
                             <input data-testid="point-title" value={point.title} onChange={(event) => setVideoLps((rows) => rows.map((item, i) => i === index ? { ...item, title: event.target.value } : item))} placeholder={L(locale, '学习点标题', 'Learning point title')} style={{ ...inputStyle, ...(titleIssue ? { borderColor: '#b42318' } : {}) }} />
                             <TypedTimeInput testId="point-time" text={point.timeText} onText={(text) => setVideoLps((rows) => rows.map((item, i) => i === index ? { ...item, timeText: text } : item))} invalid={Boolean(rowError || timeIssue)} style={inputStyle} />
@@ -898,7 +910,7 @@ export function CourseContentSection({
                         const rowError = rowErrors.triggers[index] ?? null;
                         const issue = lessonLine(`triggers[${index}].exhibitId`) ?? lessonLine(`triggers[${index}].timeSeconds`);
                         return (
-                        <div key={index} data-testid="trigger-row" style={{ display: 'grid', gridTemplateColumns: '1fr 110px 40px', gap: 8, marginTop: 8, alignItems: 'center' }}>
+                        <div key={index} data-testid="trigger-row" style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 110px 40px', gap: 8, marginTop: 8, alignItems: 'center' }}>
                           <select value={trigger.exhibitId} onChange={(event) => setTriggerRows((rows) => rows.map((item, i) => i === index ? { ...item, exhibitId: event.target.value } : item))} style={inputStyle}>
                             <option value="">{L(locale, '选择展品', 'Choose an exhibit')}</option>
                             {exhibits.map((exhibit) => <option key={exhibit.id} value={exhibit.id}>{exhibit.localized?.[contentLanguage]?.title ?? exhibit.code}</option>)}
@@ -962,7 +974,7 @@ export function CourseContentSection({
                   const rowIssue = rowErrors.readings[index] ?? cellIssue('title') ?? cellIssue('type') ?? cellIssue('author') ?? cellIssue('whyRecommended');
                   const red = (name: string) => (cellIssue(name) || rowErrors.readings[index] ? { borderColor: '#b42318' } : {});
                   return (
-                  <div key={reading.id ?? `new-${index}`} data-testid="reading-row" style={{ display: 'grid', gridTemplateColumns: '110px 1fr 1fr 1.4fr 40px', gap: 8, marginTop: 8, alignItems: 'center' }}>
+                  <div key={reading.id ?? `new-${index}`} data-testid="reading-row" style={{ display: 'grid', gridTemplateColumns: '110px minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.4fr) 40px', gap: 8, marginTop: 8, alignItems: 'center' }}>
                     <select value={reading.type} onChange={(event) => setReadingRows((rows) => rows.map((item, i) => i === index ? { ...item, type: event.target.value } : item))} style={inputStyle}>
                       <option value="BOOK">{readingTypeLabel(locale, 'BOOK')}</option>
                       <option value="ARTICLE">{readingTypeLabel(locale, 'ARTICLE')}</option>
@@ -999,8 +1011,9 @@ export function CourseContentSection({
           )}
         </div>
       ) : (
-        <div style={card}><p style={{ margin: 0, opacity: 0.7 }}>{L(locale, '添加一个课时开始编辑。', 'Add a lesson to start editing.')}</p></div>
+        <div style={{ ...card, marginTop: 0, overflow: 'auto', minWidth: 0, minHeight: 0 }}><p style={{ margin: 0, opacity: 0.7 }}>{L(locale, '添加一个课时开始编辑。', 'Add a lesson to start editing.')}</p></div>
       )}
+    </div>
 
       {exhibitDrawer && activeLesson && (
         <ExhibitDrawer
@@ -1078,6 +1091,6 @@ export function CourseContentSection({
           )}
         </Modal>
       )}
-    </div>
+    </>
   );
 }
