@@ -985,10 +985,11 @@ export class CommerceCoursesController {
   @HttpCode(202)
   export(
     @Param('id') id: string,
-    @Body() body: { version?: string },
+    @Body()
+    body: { version?: string; versionId?: string; sourceVersion?: string },
     @Req() request: BackofficeRequest,
   ) {
-    return wrap(() => this.jobs.startExport(id, actor(request), body?.version));
+    return wrap(() => this.jobs.startExport(id, actor(request), body ?? {}));
   }
 
   @Get('export/:jobId')
