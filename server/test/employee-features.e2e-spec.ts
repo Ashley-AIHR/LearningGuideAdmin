@@ -96,7 +96,14 @@ describe('Employee feature grants (e2e)', () => {
       })
       .expect(200);
     expect(put.body.success).toBe(true);
-    expect(put.body.data.catalog.length).toBe(17);
+    // 10 module + 5 课程动作；新建/删除只由角色矩阵控制，不在账号级目录里。
+    expect(put.body.data.catalog.length).toBe(15);
+    expect(put.body.data.catalog.map((entry) => entry.key)).not.toContain(
+      'course.create',
+    );
+    expect(put.body.data.catalog.map((entry) => entry.key)).not.toContain(
+      'course.delete',
+    );
     expect(put.body.data.grants.map((row) => row.feature)).toEqual([
       'module.knowledge',
       'course.publish',

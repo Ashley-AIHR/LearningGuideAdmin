@@ -14,8 +14,10 @@ import {
   effectiveMenuLevel,
   effectiveModuleLevel,
   isFeatureKey,
+  isCourseActionFeatureAllowed,
   isMenuActionAllowed,
   isModuleFeatureAllowed,
+  resolveBaselineFeatures,
   resolveEffectiveFeatures,
   type FeatureGrantMap,
   type FeatureKey,
@@ -58,8 +60,6 @@ describe('FEATURE_CATALOG 单一事实来源', () => {
       [
         'course.view',
         'course.edit',
-        'course.create',
-        'course.delete',
         'course.publish',
         'course.import',
         'course.export',
@@ -95,6 +95,10 @@ describe('FEATURE_CATALOG 单一事实来源', () => {
       'module.unknown',
       'course',
       'course.review',
+      // 新建/删除不属于账号级功能目录（与 permissions.md「新建/删除仅 ADMIN」一致），
+      // 它们只由角色矩阵控制，存量 grant 行读取时按未知 key 忽略。
+      'course.create',
+      'course.delete',
       'settings.employeeAccount',
       '',
       42,
@@ -359,6 +363,29 @@ describe('course actions: role baseline overridden per action', () => {
     assert.equal(level('COURSE_CREATOR', 'IMPORT', exportOnly), false);
   });
 
+  it('create/delete are role-matrix only: no account switch grants or revokes them', () => {
+    assert.equal(level('ADMIN', 'CREATE'), true);
+    assert.equal(level('OPERATION_ADMIN', 'DELETE'), true);
+    assert.equal(level('GRAPHIC_DESIGNER', 'CREATE'), false);
+    assert.equal(level('GRAPHIC_DESIGNER', 'DELETE'), false);
+    assert.equal(level('COURSE_CREATOR', 'CREATE'), false);
+    assert.equal(level('COURSE_CREATOR', 'DELETE'), false);
+
+    // 存量 grant 行（旧词表）读取时按未知 key 忽略：既不放大也不收紧角色矩阵。
+    const stale = withGrant([
+      ['course.create' as unknown as FeatureKey, true],
+      ['course.delete' as unknown as FeatureKey, true],
+    ]);
+    assert.equal(level('GRAPHIC_DESIGNER', 'CREATE', stale), false);
+    assert.equal(level('COURSE_CREATOR', 'DELETE', stale), false);
+    const staleDeny = withGrant([
+      ['course.create' as unknown as FeatureKey, false],
+      ['course.delete' as unknown as FeatureKey, false],
+    ]);
+    assert.equal(level('ADMIN', 'CREATE', staleDeny), true);
+    assert.equal(level('ADMIN', 'DELETE', staleDeny), true);
+  });
+
   it('actions require the module itself to be visible', () => {
     const map = withGrant([
       ['module.course', false],
@@ -495,12 +522,50 @@ describe('resolveEffectiveFeatures', () => {
       [
         'course.view',
         'course.edit',
-        'course.create',
-        'course.delete',
         'course.publish',
         'course.import',
         'course.export',
       ],
+    );
+    // 新建/删除不在账号级目录里：不出现在 effective/catalog 行中
+    assert.ok(!allowed.includes('course.create' as never));
+    assert.ok(!allowed.includes('course.delete' as never));
+  });
+});
+
+describe('角色基线展示与路由级课程动作判定', () => {
+  it('resolveBaselineFeatures 忽略账号开关，只反映角色矩阵', () => {
+    const baseline = new Map(
+      resolveBaselineFeatures('GRAPHIC_DESIGNER').map((entry) => [
+        entry.key,
+        entry,
+      ]),
+    );
+    assert.equal(baseline.get('module.course')?.level, 'EDIT');
+    assert.equal(baseline.get('module.accounts')?.level, 'NONE');
+    assert.equal(baseline.get('course.edit')?.allowed, true);
+    assert.equal(baseline.get('course.publish')?.allowed, false);
+    assert.equal(baseline.get('course.import')?.allowed, false);
+  });
+
+  it('isCourseActionFeatureAllowed 与 effectiveCourseAction 一致（可加可减）', () => {
+    const caps = parseEnabledCapabilities('course,accounts');
+    const granted = withGrant([
+      ['course.import', true],
+      ['course.publish', true],
+    ]);
+    assert.equal(
+      isCourseActionFeatureAllowed('course.import', 'GRAPHIC_DESIGNER', granted, caps),
+      true,
+    );
+    assert.equal(
+      isCourseActionFeatureAllowed('course.export', 'GRAPHIC_DESIGNER', granted, caps),
+      false,
+    );
+    const revoked = withGrant([['course.publish', false]]);
+    assert.equal(
+      isCourseActionFeatureAllowed('course.publish', 'ADMIN', revoked, caps),
+      false,
     );
   });
 });

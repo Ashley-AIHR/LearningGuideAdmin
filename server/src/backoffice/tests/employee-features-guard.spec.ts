@@ -27,7 +27,8 @@ import { BackofficeAccessGuard } from '../nest/backoffice-access.guard';
 /**
  * 守卫层证明（owner 2026-11-20）：
  * - 角色矩阵给基线，账号开关可加可减；
- * - 课程动作 import / export / publish / edit / create / view 各自独立；
+ * - 课程动作 import / export / publish / edit / view 各自独立；
+ *   create / delete 没有账号开关，只由角色矩阵控制（旧词表 grant 读取时忽略）；
  * - 环境能力（ADMIN_CAPABILITIES）永远优先于账号开关；
  * - /api/admin/employees/** 归 accounts：默认 Admin-only，账号级开关可移除或降到只读。
  *
@@ -253,15 +254,17 @@ describe('BackofficeAccessGuard: account feature grants', () => {
     );
     await expectStatus('GRAPHIC_DESIGNER', 'post', '/api/backoffice/courses', 403);
 
+    // 新建/删除不再有账号级开关（permissions.md：新建/删除只由角色矩阵控制）。
+    // 存量 grant 行（旧词表）读取时按未知 key 忽略：既不能给 View/Edit 放行，也不能收回 Full。
     grant('COURSE_CREATOR', [['course.create', true]]);
-    await expectStatus('COURSE_CREATOR', 'post', '/api/backoffice/courses', 200);
+    await expectStatus('COURSE_CREATOR', 'post', '/api/backoffice/courses', 403);
 
-    // 删除课程也是独立开关：基线只有 Full 能做，账号开关可加可减
     await expectStatus('ADMIN', 'delete', '/api/backoffice/courses/c1', 200);
     grant('ADMIN', [['course.delete', false]]);
-    await expectStatus('ADMIN', 'delete', '/api/backoffice/courses/c1', 403);
+    await expectStatus('ADMIN', 'delete', '/api/backoffice/courses/c1', 200);
     grant('GRAPHIC_DESIGNER', [['course.delete', true]]);
-    await expectStatus('GRAPHIC_DESIGNER', 'delete', '/api/backoffice/courses/c1', 200);
+    await expectStatus('GRAPHIC_DESIGNER', 'delete', '/api/backoffice/courses/c1', 403);
+    await expectStatus('OPERATION_ADMIN', 'delete', '/api/backoffice/courses/c1', 200);
   });
 
   it('lets a denied action switch tighten even an Admin', async () => {

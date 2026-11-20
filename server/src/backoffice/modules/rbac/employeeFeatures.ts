@@ -7,6 +7,7 @@ import {
   FEATURE_CATALOG,
   effectiveModuleLevel,
   isFeatureKey,
+  resolveBaselineFeatures,
   resolveEffectiveFeatures,
   type EffectiveFeature,
   type FeatureCatalogEntry,
@@ -33,6 +34,8 @@ export type EmployeeFeaturesView = {
   catalog: FeatureCatalogEntry[];
   grants: FeatureGrantView[];
   effective: EffectiveFeature[];
+  /** 角色基线（不包含账号开关），用于解释 INHERIT 行。 */
+  baseline: EffectiveFeature[];
 };
 
 export type SaveEmployeeFeaturesOutcome =
@@ -80,6 +83,7 @@ async function buildView(
       grants: map,
       enabledCapabilities,
     }),
+    baseline: resolveBaselineFeatures(employee.role),
   };
 }
 
@@ -135,48 +139,52 @@ export async function saveEmployeeFeatures(input: {
   const parsed = parseGrantInput(input.grants);
   if (!parsed) return { ok: false, code: 'INVALID_INPUT' };
 
-  const beforeMap = await featureGrantRepository.mapForEmployee(
-    employee.employeeId,
-  );
   const afterMap: FeatureGrantMap = new Map(
     parsed.map((grant) => [grant.feature, grant.allowed]),
   );
 
-  const beforeAccounts = effectiveModuleLevel(
-    employee.role,
-    'module.accounts',
-    beforeMap,
-    input.enabledCapabilities,
-  );
-  const afterAccounts = effectiveModuleLevel(
-    employee.role,
-    'module.accounts',
-    afterMap,
-    input.enabledCapabilities,
-  );
-
-  // 最后一个可用 Admin：关掉账号管理后如果没有任何其它可用管理员，拒绝（含给自己移除）。
   const usable =
     employee.accountStatus === 'ACTIVE' &&
     employee.emailVerification === 'VERIFIED';
-  if (
-    usable &&
-    employee.role === 'ADMIN' &&
-    beforeAccounts === 'FULL' &&
-    afterAccounts !== 'FULL'
-  ) {
-    const others =
-      await featureGrantRepository.countOtherAccountsCapableAdmins(
-        employee.employeeId,
-      );
-    if (others === 0) return { ok: false, code: 'PROTECTED_ADMIN_ACCOUNT' };
-  }
 
-  await featureGrantRepository.replaceForEmployee(
-    employee.employeeId,
-    parsed,
-    input.actorEmployeeId,
-  );
+  // 最后一个可用 Admin：在 advisory lock 内读取 before、判定并替换，
+  // 并发保存时串行执行，不会两个请求都看到「对方仍可用」而一起关掉账号管理。
+  const guarded = await featureGrantRepository.replaceForEmployeeGuarded({
+    employeeId: employee.employeeId,
+    grants: parsed,
+    updatedBy: input.actorEmployeeId,
+    decide: async (beforeMap, client) => {
+      const beforeAccounts = effectiveModuleLevel(
+        employee.role,
+        'module.accounts',
+        beforeMap,
+        input.enabledCapabilities,
+      );
+      const afterAccounts = effectiveModuleLevel(
+        employee.role,
+        'module.accounts',
+        afterMap,
+        input.enabledCapabilities,
+      );
+      if (
+        !usable ||
+        employee.role !== 'ADMIN' ||
+        beforeAccounts !== 'FULL' ||
+        afterAccounts === 'FULL'
+      )
+        return true;
+      const others =
+        await featureGrantRepository.countOtherAccountsCapableAdminsWithin(
+          client,
+          employee.employeeId,
+        );
+      return others > 0;
+    },
+  });
+  if (!guarded.applied) {
+    return { ok: false, code: 'PROTECTED_ADMIN_ACCOUNT' };
+  }
+  const beforeMap = guarded.before;
 
   await tryRecordAuditEvent({
     eventName: 'EMPLOYEE_FEATURES_CHANGED',

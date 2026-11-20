@@ -86,8 +86,18 @@ export const ROLE_MATRIX: Record<EmployeeRole, Record<MenuKey, PermissionLevel>>
   },
 };
 
-/** PRD §3.2 注释：Edit 只允许修改既有记录，不能创建、删除或发布。 */
-export type ActionKind = "VIEW" | "EDIT_EXISTING" | "CREATE" | "DELETE" | "PUBLISH";
+/**
+ * PRD §3.2 注释：Edit 只允许修改既有记录，不能创建、删除或发布。
+ * IMPORT / EXPORT 是发布级动作，但账号级功能开关要求单独控制（与服务端 ActionKind 对齐）。
+ */
+export type ActionKind =
+  | "VIEW"
+  | "EDIT_EXISTING"
+  | "CREATE"
+  | "DELETE"
+  | "PUBLISH"
+  | "IMPORT"
+  | "EXPORT";
 
 export function levelFor(role: EmployeeRole, menu: MenuKey): PermissionLevel {
   return ROLE_MATRIX[role][menu];
@@ -102,7 +112,14 @@ export function isActionAllowed(
   menu: MenuKey,
   action: ActionKind
 ): boolean {
-  const level = levelFor(role, menu);
+  return actionAllowedAtLevel(levelFor(role, menu), action);
+}
+
+/** 某一权限级别是否允许某种操作（账号开关解析出的生效级别也可直接套用）。 */
+export function actionAllowedAtLevel(
+  level: PermissionLevel,
+  action: ActionKind
+): boolean {
   switch (action) {
     case "VIEW":
       return level !== "NONE";
@@ -111,6 +128,9 @@ export function isActionAllowed(
     case "CREATE":
     case "DELETE":
     case "PUBLISH":
+    // 导入/导出沿用发布级基线：角色层面只有 Full 可以，账号开关再单独加减。
+    case "IMPORT":
+    case "EXPORT":
       return level === "FULL";
     default:
       return false;

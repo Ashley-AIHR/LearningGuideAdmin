@@ -6,6 +6,7 @@ import {
   DISPLAY_STATUSES,
   EMPLOYEE_ROLES,
   effectiveFeatureMap,
+  baselineFeatureMap,
   featureDraftFromFeatures,
   featureGrantsPayload,
   setFeatureMode,
@@ -783,6 +784,7 @@ export function EmployeeAccountClient({ locale }: { locale: Locale }) {
                       catalog={featureEditor.data.catalog}
                       draft={featureEditor.draft}
                       effective={effectiveFeatureMap(featureEditor.data.effective)}
+                      baseline={baselineFeatureMap(featureEditor.data.baseline)}
                       disabled={submitting}
                       onChange={(key, mode) =>
                         setFeatureEditor((current) =>

@@ -39,12 +39,14 @@ export const MODULE_FEATURES = [
 
 export type ModuleFeatureKey = (typeof MODULE_FEATURES)[number];
 
-/** 课程动作组：与 route-access 的 ActionKind 一一对应，导入/导出独立成键。 */
+/**
+ * 课程动作组（账号级）：与 route-access 的 ActionKind 对齐，导入/导出独立成键。
+ * 新建/删除（CREATE/DELETE）不在账号级功能目录里 —— permissions.md：新建/删除只由
+ * 角色矩阵控制，Admin 不能按账号把它们授予或收回。
+ */
 export const COURSE_ACTION_FEATURES = [
   'course.view',
   'course.edit',
-  'course.create',
-  'course.delete',
   'course.publish',
   'course.import',
   'course.export',
@@ -116,17 +118,19 @@ export const MODULE_CAPABILITY: Record<ModuleFeatureKey, CapabilityId> = {
   'module.accounts': 'accounts',
 };
 
-/** 课程路由动作 → 账号级动作开关。 */
-export const COURSE_ACTION_FEATURE: Record<ActionKind, CourseActionFeatureKey> =
-  {
-    VIEW: 'course.view',
-    EDIT_EXISTING: 'course.edit',
-    CREATE: 'course.create',
-    DELETE: 'course.delete',
-    PUBLISH: 'course.publish',
-    IMPORT: 'course.import',
-    EXPORT: 'course.export',
-  };
+/**
+ * 课程路由动作 → 账号级动作开关。
+ * CREATE / DELETE 没有账号开关（permissions.md：新建/删除仅由角色矩阵决定）。
+ */
+export const COURSE_ACTION_FEATURE: Partial<
+  Record<ActionKind, CourseActionFeatureKey>
+> = {
+  VIEW: 'course.view',
+  EDIT_EXISTING: 'course.edit',
+  PUBLISH: 'course.publish',
+  IMPORT: 'course.import',
+  EXPORT: 'course.export',
+};
 
 /** 反向索引：菜单 → 模块开关（operations 与 Course 同菜单，先到先得）。 */
 const MENU_MODULE: Partial<Record<MenuKey, ModuleFeatureKey>> = {};
@@ -137,11 +141,23 @@ for (const module of MODULE_FEATURES) {
 
 /** 反向索引：动作开关 → 路由动作。 */
 const FEATURE_ACTION = new Map<CourseActionFeatureKey, ActionKind>(
-  (Object.keys(COURSE_ACTION_FEATURE) as ActionKind[]).map((action) => [
-    COURSE_ACTION_FEATURE[action],
-    action,
-  ]),
+  (Object.entries(COURSE_ACTION_FEATURE) as Array<
+    [ActionKind, CourseActionFeatureKey]
+  >).map(([action, feature]) => [feature, action]),
 );
+
+/** 单个课程动作键是否生效（路由级「任一命中」门槛用）。 */
+export function isCourseActionFeatureAllowed(
+  feature: CourseActionFeatureKey,
+  role: EmployeeRole,
+  grants: FeatureGrantMap,
+  enabledCapabilities: ReadonlySet<CapabilityId>,
+): boolean {
+  const action = FEATURE_ACTION.get(feature);
+  return action
+    ? effectiveCourseAction(role, action, grants, enabledCapabilities)
+    : false;
+}
 
 /** 显式开关：缺省（没有 key）= 继承角色基线。 */
 export type FeatureGrantMap = ReadonlyMap<FeatureKey, boolean>;
@@ -199,6 +215,7 @@ export function effectiveMenuLevel(
 /**
  * 课程动作的生效结果：模块可见是前提；账号开关 false 一律拒绝，
  * true 越过角色动作基线；缺省继承角色矩阵。
+ * CREATE / DELETE 没有账号开关，始终按角色矩阵。
  */
 export function effectiveCourseAction(
   role: EmployeeRole,
@@ -212,6 +229,7 @@ export function effectiveCourseAction(
   )
     return false;
   const feature = COURSE_ACTION_FEATURE[action];
+  if (!feature) return isActionAllowed(role, 'course', action);
   const grant = grants.get(feature);
   if (grant === false) return false;
   // 模块可见（上面已确认）即允许查看；显式允许再越过角色动作基线。
@@ -280,4 +298,23 @@ export function effectiveFeatureKeys(input: {
   return resolveEffectiveFeatures(input)
     .filter((entry) => entry.allowed)
     .map((entry) => entry.key);
+}
+
+/**
+ * 角色基线（不看账号开关）：功能权限抽屉用来解释「继承」到底继承到什么。
+ * module.* 给角色矩阵级别；course.* 给角色矩阵下的布尔结果。
+ */
+export function resolveBaselineFeatures(role: EmployeeRole): EffectiveFeature[] {
+  return FEATURE_CATALOG.map((entry) => {
+    if (isModuleFeatureKey(entry.key)) {
+      const level = baselineLevel(role, entry.key);
+      return { key: entry.key, allowed: level !== 'NONE', level };
+    }
+    const action = FEATURE_ACTION.get(entry.key as CourseActionFeatureKey);
+    return {
+      key: entry.key,
+      allowed: action ? isActionAllowed(role, 'course', action) : false,
+      level: null,
+    };
+  });
 }

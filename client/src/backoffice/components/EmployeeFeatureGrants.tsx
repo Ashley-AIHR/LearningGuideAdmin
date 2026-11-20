@@ -43,6 +43,7 @@ export function EmployeeFeatureGrants({
   catalog,
   draft,
   effective,
+  baseline,
   disabled = false,
   onChange,
 }: {
@@ -51,6 +52,8 @@ export function EmployeeFeatureGrants({
   draft: Readonly<Record<string, FeatureMode>>
   /** 服务端生效结果 key → allowed；缺失的 key 不显示结论。 */
   effective: Readonly<Record<string, boolean>>
+  /** 角色基线（不含账号开关）；INHERIT 行用它解释继承到什么。旧服务端缺省。 */
+  baseline?: Readonly<Record<string, { allowed: boolean; level?: string | null }>>
   disabled?: boolean
   onChange: (key: string, mode: FeatureMode) => void
 }) {
@@ -77,6 +80,13 @@ export function EmployeeFeatureGrants({
               const label = featureLabel(locale, item.key)
               const mode = draft[item.key] ?? 'INHERIT'
               const allowed = effective[item.key]
+              const inherited = baseline?.[item.key]
+              const zh = locale.startsWith('zh')
+              const baselineText = inherited
+                ? `${zh ? '角色基线' : 'Role baseline'}: ${
+                    inherited.level ?? (inherited.allowed ? (zh ? '允许' : 'allowed') : (zh ? '禁止' : 'blocked'))
+                  }`
+                : null
               return (
                 <div
                   key={item.key}
@@ -89,7 +99,17 @@ export function EmployeeFeatureGrants({
                     padding: '5px 0',
                   }}
                 >
-                  <span style={{ fontSize: 13 }}>{label}</span>
+                  <span style={{ fontSize: 13 }}>
+                    {label}
+                    {mode === 'INHERIT' && baselineText && (
+                      <span
+                        data-testid={`feature-baseline-${item.key}`}
+                        style={{ display: 'block', fontSize: 11, opacity: 0.65 }}
+                      >
+                        {baselineText}
+                      </span>
+                    )}
+                  </span>
                   <div className="segmented" role="radiogroup" aria-label={label}>
                     {FEATURE_MODES.map((value) => {
                       const selected = mode === value

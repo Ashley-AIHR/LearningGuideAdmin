@@ -141,7 +141,7 @@ test('菜单 = 角色 ∩ 环境能力 ∩ 账号 module.*：账号禁止的模�
   // 账号禁止 knowledge / ai
   const restricted = filterMenusByFeatures(
     roleMenus,
-    featuresOf('module.course', 'module.settings', 'module.accounts'),
+    featuresOf('module.course', 'course.view', 'module.settings', 'module.accounts'),
   )
   assert.deepEqual(restricted, ['course', 'settings'])
   // 只保留 module.accounts：settings 菜单仍可见（账号管理独立能力），其余隐藏
@@ -152,7 +152,7 @@ test('菜单 = 角色 ∩ 环境能力 ∩ 账号 module.*：账号禁止的模�
   const operation = visibleMenus('OPERATION_ADMIN')
   assert.ok(!operation.includes('knowledge'))
   assert.ok(
-    accountMenus(operation, featuresOf('module.course', 'module.knowledge', 'module.settings', 'module.accounts', 'module.order', 'module.reporting', 'module.students', 'module.helpdesk')).includes('knowledge'),
+    accountMenus(operation, featuresOf('module.course', 'course.view', 'module.knowledge', 'module.settings', 'module.accounts', 'module.order', 'module.reporting', 'module.students', 'module.helpdesk')).includes('knowledge'),
   )
   // 旧服务端（features 缺失）仍按角色菜单，不会因为 grants 未知而放开
   assert.deepEqual(accountMenus(operation, null), operation)
@@ -170,7 +170,7 @@ test('路由归属：settings 子项分辨 accounts / settings，其余菜单按
   assert.deepEqual(featureKeysForSegments(['settings', 'employee-account']), ['module.accounts'])
   assert.deepEqual(featureKeysForSegments(['settings', 'payment-gateway']), ['module.settings'])
   assert.deepEqual(featureKeysForSegments(['settings']), ['module.settings', 'module.accounts'])
-  assert.deepEqual(featureKeysForSegments(['course', 'c1']), ['module.course'])
+  assert.deepEqual(featureKeysForSegments(['course', 'c1']), ['module.course', 'course.view'])
   assert.deepEqual(featureKeysForSegments(['student']), ['module.students'])
   assert.equal(featureKeysForSegments([]), null)
 })
@@ -178,7 +178,7 @@ test('路由归属：settings 子项分辨 accounts / settings，其余菜单按
 test('落点菜单同时满足环境能力与账号功能', () => {
   const admin = visibleMenus('ADMIN')
   assert.equal(landingMenuFor(admin, caps('course', 'accounts'), featuresOf('module.accounts')), 'settings')
-  assert.equal(landingMenuFor(admin, caps('course', 'accounts'), featuresOf('module.course', 'module.accounts')), 'course')
+  assert.equal(landingMenuFor(admin, caps('course', 'accounts'), featuresOf('module.course', 'course.view', 'module.accounts')), 'course')
   assert.equal(landingMenuFor(admin, caps('course'), featuresOf('module.settings')), null)
   assert.equal(landingMenuFor(admin, caps('knowledge'), null), 'knowledge')
 })

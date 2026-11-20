@@ -8,9 +8,11 @@ import {
   getEmployeeFeatures,
   saveEmployeeFeatures,
 } from '../modules/rbac/employeeFeatures';
+import { updateEmployee } from '../modules/employee-account/services/employeeAccount';
 import {
   effectiveModuleLevel,
   type FeatureGrantMap,
+  type FeatureKey,
 } from '../modules/rbac/features';
 import * as featureGrantRepository from '../repositories/featureGrantRepository';
 
@@ -208,7 +210,14 @@ describeDb('employee feature grants (PostgreSQL)', () => {
       );
       const view = await getEmployeeFeatures(FINANCE_C, ALL);
       expect(view).not.toBeNull();
-      expect(view?.catalog.length).toBe(17);
+      // 10 module + 5 课程动作（新建/删除不在账号级目录里）
+      expect(view?.catalog.length).toBe(15);
+      expect(view?.catalog.map((entry) => entry.key)).not.toContain(
+        'course.create',
+      );
+      expect(view?.catalog.map((entry) => entry.key)).not.toContain(
+        'course.delete',
+      );
       expect(view?.grants.map((row) => row.feature)).toEqual([
         'module.knowledge',
         'course.publish',
@@ -235,6 +244,9 @@ describeDb('employee feature grants (PostgreSQL)', () => {
     it('rejects unknown keys, duplicates and non-boolean switches', async () => {
       for (const grants of [
         [{ feature: 'module.unknown', allowed: true }],
+        // 新建/删除已从账号级功能目录移除：PUT 不能再写入它们
+        [{ feature: 'course.create', allowed: true }],
+        [{ feature: 'course.delete', allowed: true }],
         [{ feature: 'course.publish', allowed: 'yes' }],
         [
           { feature: 'course.publish', allowed: true },
@@ -255,6 +267,53 @@ describeDb('employee feature grants (PostgreSQL)', () => {
         expect(outcome.ok === false && outcome.code).toBe('INVALID_INPUT');
       }
       expect(await grantRows()).toEqual([]);
+    });
+
+    it('ignores stale rows for keys removed from the catalogue (idempotent on read)', async () => {
+      // 升级前的存量行：功能目录里已经没有 course.create / course.delete。
+      await db.query(
+        `INSERT INTO employee_feature_grants
+           (employee_id, feature, allowed, updated_by)
+         VALUES ($1, 'course.create', true, $2),
+                ($1, 'course.delete', true, $2),
+                ($1, 'course.publish', true, $2)`,
+        [FINANCE_C, ADMIN_A],
+      );
+
+      // 读取：未知 key 按"继承角色"处理，不出现在 grants / effective / catalog。
+      const map = await featureGrantRepository.mapForEmployee(FINANCE_C);
+      expect(map.has('course.create' as unknown as FeatureKey)).toBe(false);
+      expect(map.has('course.delete' as unknown as FeatureKey)).toBe(false);
+      expect(map.get('course.publish')).toBe(true);
+
+      const view = await getEmployeeFeatures(FINANCE_C, ALL);
+      expect(view?.grants.map((row) => row.feature)).toEqual([
+        'course.publish',
+      ]);
+      const effectiveKeys = (view?.effective ?? []).map((entry) => entry.key);
+      expect(effectiveKeys).not.toContain('course.create');
+      expect(effectiveKeys).not.toContain('course.delete');
+
+      // 再保存一次（全量替换）会把存量行清掉，展示结果保持一致（幂等）。
+      const saved = await saveEmployeeFeatures({
+        employeeId: FINANCE_C,
+        grants: [{ feature: 'course.publish', allowed: true }],
+        actorEmployeeId: ADMIN_A,
+        ipAddress: null,
+        enabledCapabilities: ALL,
+      });
+      expect(saved.ok).toBe(true);
+      const rows = await db.query<{ feature: string }>(
+        `SELECT feature FROM employee_feature_grants
+          WHERE employee_id = $1 ORDER BY feature`,
+        [FINANCE_C],
+      );
+      expect(rows.map((row) => row.feature)).toEqual(['course.publish']);
+      const after = await getEmployeeFeatures(FINANCE_C, ALL);
+      const shape = (grants: typeof view) =>
+        grants?.grants.map(({ feature, allowed }) => ({ feature, allowed }));
+      expect(shape(after)).toEqual(shape(view));
+      expect(after?.effective).toEqual(view?.effective);
     });
 
     it('rejects a nonexistent employee', async () => {
@@ -395,6 +454,81 @@ describeDb('employee feature grants (PostgreSQL)', () => {
           noAccounts,
         ),
       ).toBe('NONE');
+    });
+  });
+
+  describe('last usable Admin — role/status and concurrency', () => {
+    it('refuses to demote or deactivate the last usable Admin (self-lockout)', async () => {
+      await db.query(`DELETE FROM employees WHERE employee_id = $1`, [ADMIN_B]);
+      const demote = await updateEmployee({
+        employeeId: ADMIN_A,
+        role: 'FINANCE',
+        actorEmployeeId: ADMIN_A,
+        locale: 'en-GB',
+        appUrl: 'http://localhost',
+        ipAddress: null,
+      });
+      expect(demote.ok).toBe(false);
+      expect(demote.ok === false && demote.code).toBe('PROTECTED_ADMIN_ACCOUNT');
+      const inactive = await updateEmployee({
+        employeeId: ADMIN_A,
+        accountStatus: 'INACTIVE',
+        actorEmployeeId: ADMIN_A,
+        locale: 'en-GB',
+        appUrl: 'http://localhost',
+        ipAddress: null,
+      });
+      expect(inactive.ok).toBe(false);
+      expect(inactive.ok === false && inactive.code).toBe('PROTECTED_ADMIN_ACCOUNT');
+      const rows = await db.query<{ role: string; account_status: string }>(
+        `SELECT role, account_status FROM employees WHERE employee_id = $1`,
+        [ADMIN_A],
+      );
+      expect(rows[0]).toEqual({ role: 'ADMIN', account_status: 'ACTIVE' });
+    });
+
+    it('allows demotion when another usable Admin remains', async () => {
+      const outcome = await updateEmployee({
+        employeeId: ADMIN_A,
+        role: 'FINANCE',
+        actorEmployeeId: ADMIN_A,
+        locale: 'en-GB',
+        appUrl: 'http://localhost',
+        ipAddress: null,
+      });
+      expect(outcome.ok).toBe(true);
+    });
+
+    it('serializes concurrent account-management shutoffs (no 0-admin outcome)', async () => {
+      const [a, b] = await Promise.all([
+        saveEmployeeFeatures({
+          employeeId: ADMIN_A,
+          grants: [{ feature: 'module.accounts', allowed: false }],
+          actorEmployeeId: ADMIN_A,
+          ipAddress: null,
+          enabledCapabilities: ALL,
+        }),
+        saveEmployeeFeatures({
+          employeeId: ADMIN_B,
+          grants: [{ feature: 'module.accounts', allowed: false }],
+          actorEmployeeId: ADMIN_B,
+          ipAddress: null,
+          enabledCapabilities: ALL,
+        }),
+      ]);
+      const successes = [a, b].filter((outcome) => outcome.ok).length;
+      expect(successes).toBe(1);
+      const capable = await db.query<{ count: number }>(
+        `SELECT COUNT(*)::int AS count FROM employees e
+          WHERE e.role = 'ADMIN' AND e.account_status = 'ACTIVE'
+            AND e.email_verification = 'VERIFIED'
+            AND NOT EXISTS (
+              SELECT 1 FROM employee_feature_grants g
+               WHERE g.employee_id = e.employee_id
+                 AND g.feature = 'module.accounts' AND g.allowed = false
+            )`,
+      );
+      expect(capable[0]?.count).toBe(1);
     });
   });
 });

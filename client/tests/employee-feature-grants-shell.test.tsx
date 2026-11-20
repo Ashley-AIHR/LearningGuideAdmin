@@ -93,7 +93,7 @@ test('旧服务端（session 无 features、环境无 capabilities）：菜单�
 
 test('Sandbox 形态 course,accounts：侧栏只剩 Course 与 Settings（账号管理独立能力）', async () => {
   const server = serve({
-    features: ['module.course', 'module.accounts'],
+    features: ['module.course', 'course.view', 'module.accounts'],
     capabilities: ['course', 'accounts'],
   })
   try {
@@ -130,6 +130,7 @@ test('账号允许可越过角色 NONE：OPERATION_ADMIN 被授予 module.knowle
       sidebarState: 'expanded',
       features: [
         'module.course',
+        'course.view',
         'module.knowledge',
         'module.order',
         'module.reporting',

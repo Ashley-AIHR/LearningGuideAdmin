@@ -27,7 +27,7 @@ export type RouteAccess =
   | { kind: 'employeeAdmin' }
   /**
    * 员工账号管理（/api/admin/employees/**）：归 accounts 能力；
-   * VIEW = 账号列表（Admin 基线，账号开关可降到只读），写 = FULL；
+   * VIEW = 账号列表（仅 Admin 基线），写 = FULL；
    * 功能权限 GET/PUT 用 PUBLISH（只有 Full/Admin 可读可改，避免泄露他人 grants）。
    */
   | { kind: 'accountsAdmin'; action: ActionKind }
@@ -37,6 +37,8 @@ export type RouteAccess =
       menus: MenuKey[];
       action: ActionKind;
       feature?: FeatureKey;
+      /** 任一功能键生效即放行（用于作业列表这类「导入或导出都该能看」的路径）。 */
+      featuresAny?: FeatureKey[];
     };
 
 const PUBLIC_AUTH = new Set([
@@ -229,13 +231,32 @@ export function routeAccess(method: string, path: string): RouteAccess {
         feature: 'module.operations',
       };
     }
-    // 商品课程 v2（/api/backoffice/courses/**）：导入/导出/发布各自独立成动作开关
+    // 只有 courses 前缀归课程菜单；其它未登记的 /api/backoffice/<x> 一律 Admin-only，
+    // 避免以后新增控制器忘记登记时被所有 course VIEW 账号读到（fail-closed）。
+    if (second !== 'courses') return { kind: 'employeeAdmin' };
+    // 作业列表同时暴露导入/导出作业，必须与 IMPORT / EXPORT 开关一致：
+    // 只有 course.view 的账号不能读作业元数据（docs/sandbox/permissions.md §4）。
+    if (
+      second === 'courses' &&
+      segments[2] === 'jobs' &&
+      segments[3] === 'list'
+    ) {
+      return {
+        kind: 'menu',
+        menus: ['course'],
+        action: 'VIEW',
+        featuresAny: ['course.import', 'course.export'],
+      };
+    }
+    // 商品课程 v2（/api/backoffice/courses/**）：导入/导出/发布各自独立成动作开关；
+    // 新建/删除没有账号级开关（只由角色矩阵控制），路由不带 feature。
     const action = backofficeCourseAction(verb, segments);
+    const feature = COURSE_ACTION_FEATURE[action];
     return {
       kind: 'menu',
       menus: ['course'],
       action,
-      feature: COURSE_ACTION_FEATURE[action],
+      ...(feature ? { feature } : {}),
     };
   }
   const action = actionFor(verb, segments);

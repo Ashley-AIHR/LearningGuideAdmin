@@ -120,7 +120,11 @@ describe('route access classification', () => {
 
   it('lets Course=Edit change content inside an existing course, never create, publish or price one (REQ-0236)', () => {
     const c = ['course'];
-    const feature = (action: string) => `course.${action.toLowerCase().replace('_existing', '')}`;
+    // 新建/删除不在账号级功能词表里（只由角色矩阵控制），路由不带 feature。
+    const feature = (action: string) =>
+      action === 'CREATE' || action === 'DELETE'
+        ? undefined
+        : `course.${action.toLowerCase().replace('_existing', '')}`;
     const cases: [string, string, string][] = [
       ['GET', '/api/backoffice/courses', 'VIEW'],
       ['GET', '/api/backoffice/courses/c1/history', 'VIEW'],
@@ -204,6 +208,9 @@ describe('route access classification', () => {
       ['GET', '/api/backoffice/courses/import/j1', 'IMPORT'],
       ['GET', '/api/backoffice/courses/export/j1', 'EXPORT'],
       ['GET', '/api/backoffice/courses/export/j1/download', 'EXPORT'],
+      ['POST', '/api/backoffice/courses/import/package/session', 'IMPORT'],
+      ['PUT', '/api/backoffice/courses/import/package/j1/chunk', 'IMPORT'],
+      ['POST', '/api/backoffice/courses/import/package/j1/complete', 'IMPORT'],
       ['PUT', '/api/backoffice/courses/c1/trial', 'CREATE'],
       ['PUT', '/api/backoffice/courses/c1/plans', 'CREATE'],
       ['POST', '/api/backoffice/courses/c1/plans/p1/sync-stripe', 'CREATE'],
@@ -357,6 +364,19 @@ describe('route access classification', () => {
   it('gives unregistered endpoints to Admin only', () => {
     assert.deepEqual(routeAccess('GET', '/api/something-new'), {
       kind: 'employeeAdmin',
+    });
+    // 未登记的 /api/backoffice/<x> 不能落到 course VIEW（fail-closed）
+    assert.deepEqual(routeAccess('GET', '/api/backoffice/helpdesk/x'), {
+      kind: 'employeeAdmin',
+    });
+  });
+
+  it('constrains the job list by IMPORT / EXPORT, not plain course.view', () => {
+    assert.deepEqual(routeAccess('GET', '/api/backoffice/courses/jobs/list'), {
+      kind: 'menu',
+      menus: ['course'],
+      action: 'VIEW',
+      featuresAny: ['course.import', 'course.export'],
     });
   });
 

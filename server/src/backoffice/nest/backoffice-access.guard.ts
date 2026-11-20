@@ -22,9 +22,11 @@ import { isDeployed } from '../lib/env';
 import { decideEmployeeAccountAccess } from '../modules/rbac/access';
 import {
   effectiveModuleLevel,
+  isCourseActionFeatureAllowed,
   isMenuActionAllowed,
   isModuleFeatureAllowed,
   isModuleFeatureKey,
+  type CourseActionFeatureKey,
 } from '../modules/rbac/features';
 import { grantsForRequest } from '../modules/rbac/employeeFeatures';
 import { resolveSession } from '../modules/user-authentication/services/session';
@@ -142,6 +144,22 @@ export class BackofficeAccessGuard implements CanActivate {
       throw backofficeError(
         'NOT_AUTHORISED',
         'This module is not available for your account',
+      );
+    }
+    if (
+      access.featuresAny &&
+      !access.featuresAny.some((feature) =>
+        isCourseActionFeatureAllowed(
+          feature as CourseActionFeatureKey,
+          employee.role,
+          grants,
+          this.enabledCapabilities,
+        ),
+      )
+    ) {
+      throw backofficeError(
+        'NOT_AUTHORISED',
+        'This action requires import or export access',
       );
     }
     if (

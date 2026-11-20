@@ -1,12 +1,11 @@
 import { Link, Navigate } from 'react-router-dom'
 
 import { SettingsSubNav } from '../components/SettingsSubNav'
-import { cachedAccountFeatures, cachedCapabilities } from '../lib/capabilities'
+import { cachedAccountFeatures, cachedCapabilities, menuEffectiveLevel } from '../lib/capabilities'
 import { t } from '../lib/i18n/messages'
 import { useLocale } from '../lib/navigation'
 import {
   canAccessEmployeeAccount,
-  canViewMenu,
   menuHref,
   settingsSubHref,
   visibleSettingsSubs,
@@ -42,10 +41,11 @@ export function ForbiddenCard() {
   )
 }
 
-/** PORT-NAV-004 / §15.3：直接输入 URL 也必须按权限拒绝（接口另由服务端守卫拒绝）。 */
+/** PORT-NAV-004 / §15.3：直接输入 URL 也必须按权限拒绝（接口另由服务端守卫拒绝）。
+ *  账号功能键允许时可以把角色 NONE 的模块抬到 VIEW（与 /api/session 的 effective 一致）。 */
 export function MenuGuard({ menu, children }: { menu: MenuKey; children: React.ReactNode }) {
   const employee = useEmployee()
-  return canViewMenu(employee.role, menu) ? <>{children}</> : <ForbiddenCard />
+  return menuEffectiveLevel(employee.role, menu) !== 'NONE' ? <>{children}</> : <ForbiddenCard />
 }
 
 export function CoursePage() {

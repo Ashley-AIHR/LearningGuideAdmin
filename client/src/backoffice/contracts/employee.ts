@@ -132,6 +132,8 @@ export type EmployeeFeatures = {
   catalog: EmployeeFeatureCatalogEntry[];
   grants: EmployeeFeatureGrant[];
   effective: EmployeeFeatureEffective[];
+  /** 角色基线（不含账号开关），用于解释 INHERIT 行。旧服务端缺省。 */
+  baseline?: EmployeeFeatureEffective[];
 };
 
 /** 界面三态：继承角色（不发开关）/ 允许 / 禁止。 */
@@ -193,5 +195,14 @@ export function effectiveFeatureMap(
 ): Record<string, boolean> {
   const map: Record<string, boolean> = {};
   for (const row of effective ?? []) map[row.key] = row.allowed;
+  return map;
+}
+
+/** INHERIT 行展示用：key → 角色基线级别（模块）或 allowed（课程动作）。 */
+export function baselineFeatureMap(
+  baseline: readonly EmployeeFeatureEffective[] | null | undefined
+): Record<string, { allowed: boolean; level?: string | null }> {
+  const map: Record<string, { allowed: boolean; level?: string | null }> = {};
+  for (const row of baseline ?? []) map[row.key] = { allowed: row.allowed, level: row.level };
   return map;
 }

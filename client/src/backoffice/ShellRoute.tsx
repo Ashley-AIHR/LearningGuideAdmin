@@ -7,7 +7,7 @@ import {
   accountMenus,
   capabilitiesForSegments,
   capabilitiesFromEnvironment,
-  featureKeysForSegments,
+  featureRequirementForSegments,
   filterMenusByCapabilities,
   landingMenuFor,
   rememberAccountFeatures,
@@ -108,13 +108,15 @@ export function ShellRoute() {
   const menus = filterMenusByCapabilities(candidateMenus, capabilities)
   // 路由门 = 环境能力 ∩ 账号功能：任一集合命中即放行；旧服务端（features 缺失）不额外限制
   const requiredCapabilities = capabilitiesForSegments(segments)
-  const requiredFeatures = featureKeysForSegments(segments)
+  const requiredFeatures = featureRequirementForSegments(segments)
   const missingCapability =
     requiredCapabilities !== null && !requiredCapabilities.some((id) => capabilities.has(id))
   const missingFeature =
     accountFeatures !== null &&
     requiredFeatures !== null &&
-    !requiredFeatures.some((key) => accountFeatures.has(key))
+    (!requiredFeatures.allOf.every((key) => accountFeatures.has(key)) ||
+      (requiredFeatures.anyOf.length > 0 &&
+        !requiredFeatures.anyOf.some((key) => accountFeatures.has(key))))
   if (missingCapability || missingFeature) {
     const landing = landingMenuFor(candidateMenus, capabilities, accountFeatures)
     return landing === null ? <NoModulesCard /> : <Navigate to={menuHref(locale, landing)} replace />

@@ -1,4 +1,5 @@
-import { MENU_ORDER, type MenuKey } from '../rbac/permissions'
+import type { EmployeeRole } from '../contracts/employee'
+import { MENU_ORDER, isActionAllowed, levelFor, type ActionKind, type MenuKey, type PermissionLevel } from '../rbac/permissions'
 
 /**
  * 前端能力门 —— 与服务端 ADMIN_CAPABILITIES 同名同义（server/src/common/capabilities.ts）。
@@ -161,7 +162,12 @@ export function menuFeatureAllowed(
   menu: MenuKey,
   features: AccountFeatures,
 ): boolean {
-  return features === null || MENU_FEATURE_KEYS[menu].some((key) => features.has(key))
+  if (features === null) return true
+  // Course 与其它模块不同：能看到菜单还必须能 view（course.view 可被账号开关单独收回）。
+  if (menu === 'course') {
+    return features.has('module.course') && features.has('course.view')
+  }
+  return MENU_FEATURE_KEYS[menu].some((key) => features.has(key))
 }
 
 /** 侧栏菜单再 ∩ 账号生效功能（任务口径：角色 ∩ 环境能力 ∩ 账号 module.*）。 */
@@ -228,14 +234,73 @@ const SEGMENT_FEATURE_KEYS: Record<string, readonly string[]> = {
 export function featureKeysForSegments(
   segments: readonly string[] | undefined,
 ): readonly string[] | null {
+  const requirement = featureRequirementForSegments(segments)
+  if (requirement === null) return null
+  // 兼容旧的「返回 key 列表」调用：allOf 与 anyOf 都列出（course 会同时含 module.course/course.view）。
+  return [...requirement.allOf, ...requirement.anyOf]
+}
+
+/**
+ * 路由的账号功能要求：anyOf 命中即放行，allOf 必须全部命中。
+ * Course 需要 module.course AND course.view —— 只收回 View 时课程菜单与路由都必须消失，
+ * 否则页面能打开但每个接口都 403。其它模块仍是「任一命中」。
+ */
+export function featureRequirementForSegments(
+  segments: readonly string[] | undefined,
+): { allOf: readonly string[]; anyOf: readonly string[] } | null {
   if (!segments || segments.length === 0) return null
   const [first, second] = segments
+  if (first === 'course') return { allOf: ['module.course', 'course.view'], anyOf: [] }
   if (first === 'settings') {
-    if (second === 'employee-account') return ['module.accounts']
-    if (second === undefined) return ['module.settings', 'module.accounts']
-    return ['module.settings']
+    if (second === 'employee-account') return { allOf: [], anyOf: ['module.accounts'] }
+    if (second === undefined) return { allOf: [], anyOf: ['module.settings', 'module.accounts'] }
+    return { allOf: [], anyOf: ['module.settings'] }
   }
-  return SEGMENT_FEATURE_KEYS[first] ?? null
+  const keys = SEGMENT_FEATURE_KEYS[first]
+  return keys === undefined ? null : { allOf: [], anyOf: keys }
+}
+
+/** 课程动作 → 账号功能键（与服务端 COURSE_ACTION_FEATURE 同名同义）。 */
+export const COURSE_ACTION_FEATURE_KEYS: Record<ActionKind, string> = {
+  VIEW: 'course.view',
+  EDIT_EXISTING: 'course.edit',
+  CREATE: 'course.create',
+  DELETE: 'course.delete',
+  PUBLISH: 'course.publish',
+  IMPORT: 'course.import',
+  EXPORT: 'course.export',
+}
+
+/**
+ * 课程动作的生效判定（UI 用）：会话有 features 时以服务端 effective 为准（可加可减），
+ * 旧服务端（features 缺失）回退角色矩阵。服务端仍是最终执行点。
+ * 新建/删除不开放账号级开关（与 permissions.md 一致），始终按角色矩阵判定。
+ */
+export function courseActionAllowed(
+  role: EmployeeRole,
+  action: ActionKind,
+  features: AccountFeatures = cachedAccountFeatures(),
+): boolean {
+  const matrix = () => isActionAllowed(role, 'course', action)
+  if (features === null) return matrix()
+  if (action === 'CREATE' || action === 'DELETE') return matrix()
+  return features.has(COURSE_ACTION_FEATURE_KEYS[action])
+}
+
+/**
+ * 工作区（Knowledge / AI Tutor / HelpDesk）的生效级别：账号开关允许可把角色 NONE 抬到 VIEW，
+ * 账号开关拒绝则收紧到 NONE；旧服务端回退角色矩阵。
+ */
+export function menuEffectiveLevel(
+  role: EmployeeRole,
+  menu: MenuKey,
+  features: AccountFeatures = cachedAccountFeatures(),
+): PermissionLevel {
+  const baseline = levelFor(role, menu)
+  if (features === null) return baseline
+  const keys = MENU_FEATURE_KEYS[menu]
+  if (!keys.some((key) => features.has(key))) return 'NONE'
+  return baseline === 'NONE' ? 'VIEW' : baseline
 }
 
 /** 被禁用路由的落点：角色可见、能力启用且账号功能允许的第一个菜单；没有则 null。 */
