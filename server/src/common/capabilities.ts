@@ -54,6 +54,17 @@ export function parseEnabledCapabilities(
   return new Set(items as CapabilityId[]);
 }
 
+/**
+ * 某能力是否启用（未配置 ADMIN_CAPABILITIES = 全开）。
+ * HTTP 之外的后台入口（启动期调度、seed）也要走同一套能力语义。
+ */
+export function isCapabilityEnabled(
+  id: CapabilityId,
+  raw: string | undefined = process.env.ADMIN_CAPABILITIES,
+): boolean {
+  return parseEnabledCapabilities(raw).has(id);
+}
+
 type GovernedPrefix = {
   /** 去掉 /api 后的前若干路径段（按段比较，/api/coursesx 不会命中 courses）。 */
   segments: readonly string[];

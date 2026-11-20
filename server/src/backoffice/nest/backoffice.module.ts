@@ -53,6 +53,7 @@ import {
   sharedFaqVectorSearch,
 } from '../modules/helpdesk/faqs/faqVectors';
 import { createHelpdeskService } from '../modules/helpdesk/helpdeskService';
+import { isCapabilityEnabled } from '../../common/capabilities';
 import { createPgCandidateRepository } from '../modules/helpdesk/flywheel/candidateRepository';
 import { createFaqCandidateService } from '../modules/helpdesk/flywheel/faqCandidateService';
 import {
@@ -167,6 +168,8 @@ export class HelpdeskFlywheelScheduler
   onApplicationBootstrap(): void {
     // 测试里不起调度（调度本身由 helpdesk-flywheel-jobs.spec.ts 用假定时器测）
     if (process.env.NODE_ENV === 'test') return;
+    // 能力门：helpdesk 关闭时（如 sandbox 只开 course）不起后台作业。
+    if (!isCapabilityEnabled('helpdesk')) return;
     this.scheduler = startFlywheelScheduler({
       tick: () => this.runner.runScheduled('gap_mining'),
     });
@@ -186,6 +189,8 @@ export class HelpdeskFlywheelScheduler
 @Injectable()
 export class HelpdeskDemoBoot implements OnApplicationBootstrap {
   onApplicationBootstrap(): void {
+    // 能力门：helpdesk 关闭时不灌任何帮助台数据。
+    if (!isCapabilityEnabled('helpdesk')) return;
     const seed = helpdeskBootSeed(process.env);
     // 不 await：不阻塞启动和健康检查
     if (seed === 'demo') void autoSeedDemoOnce();

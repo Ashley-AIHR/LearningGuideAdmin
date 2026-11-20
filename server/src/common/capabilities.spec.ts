@@ -3,6 +3,7 @@ import {
   CAPABILITY_IDS,
   capabilityForPath,
   capabilityGateAllows,
+  isCapabilityEnabled,
   parseEnabledCapabilities,
   type CapabilityId,
 } from './capabilities';
@@ -161,5 +162,24 @@ describe('能力门：路径前缀 → 能力映射表', () => {
     const none = new Set<CapabilityId>();
     expect(capabilityGateAllows('/api/health', none)).toBe(true);
     expect(capabilityGateAllows('/api/backoffice/courses', none)).toBe(false);
+  });
+});
+
+describe('isCapabilityEnabled（启动期后台入口的同一语义）', () => {
+  it('未配置 ADMIN_CAPABILITIES = 启用', () => {
+    expect(isCapabilityEnabled('helpdesk', undefined)).toBe(true);
+    expect(isCapabilityEnabled('helpdesk', '')).toBe(true);
+  });
+
+  it('只开 course 时关闭 helpdesk，显式包含时启用', () => {
+    expect(isCapabilityEnabled('helpdesk', 'course')).toBe(false);
+    expect(isCapabilityEnabled('course', 'course')).toBe(true);
+    expect(isCapabilityEnabled('helpdesk', 'course, helpdesk')).toBe(true);
+  });
+
+  it('未知能力启动即报错（不静默关闭）', () => {
+    expect(() => isCapabilityEnabled('course', 'cours')).toThrow(
+      /ADMIN_CAPABILITIES/,
+    );
   });
 });
