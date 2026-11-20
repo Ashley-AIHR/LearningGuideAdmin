@@ -82,9 +82,6 @@ function CourseManagementInner({ locale }: { locale: ReturnType<typeof useLocale
   const navigate = useNavigate()
   const L = (zh: string, en: string) => (locale.startsWith('zh') ? zh : en)
   const canPublish = employee.role === 'ADMIN' || employee.role === 'OPERATION_ADMIN'
-  // 能力门：Operations 的接口与路由归属 operations 能力（sandbox 只开 course）；
-  // 能力未启用时不渲染按钮，避免指向被能力门 404 的操作页。能力集由 ShellRoute 拉环境端点时缓存。
-  const capabilities = cachedCapabilities()
   const [list, setList] = useState<CourseList | null>(null)
   const [loading, setLoading] = useState(true)
   const [page, setPage] = useState(1)
@@ -97,6 +94,7 @@ function CourseManagementInner({ locale }: { locale: ReturnType<typeof useLocale
   // null = 正在读取；'' = 读取失败；其余是服务器给的下一个 Course ID。
   const [nextCode, setNextCode] = useState<string | null>(null)
   const [showImport, setShowImport] = useState(false)
+  const [importMenuOpen, setImportMenuOpen] = useState(false)
   const [actionMenuId, setActionMenuId] = useState<string | null>(null)
   const [statusCourse, setStatusCourse] = useState<CourseList['courses'][number] | null>(null)
   const [statusTarget, setStatusTarget] = useState<'ONLINE' | 'HIDDEN' | 'OFFLINE'>('ONLINE')
@@ -440,22 +438,14 @@ function CourseManagementInner({ locale }: { locale: ReturnType<typeof useLocale
   }
 
   return (
-    <section className="card cardGrow">
-      <header style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
-        <div>
-          <h1 className="cardTitle">{t(locale, 'course.title')}</h1>
-          <p className="cardBody">
-            {list
-              ? L(
-                  `${list.counts.total} 门课程 · ${list.counts.draft} 草稿 · ${list.counts.online} 在线 · ${list.counts.notPublished} 未发布`,
-                  `${list.counts.total} courses · ${list.counts.draft} with draft · ${list.counts.online} online · ${list.counts.notPublished} not published`,
-                )
-              : t(locale, 'course.description')}
-          </p>
+    <section className="card cardGrow course-ui-overview" data-testid="course-overview-page">
+      <div className="pageHead course-ui-overviewHead">
+        <div className="course-ui-overviewHeadMain">
+          <h1 className="cardTitle">{L('课程概览', 'Course Overview')}</h1>
         </div>
         {canPublish && (
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            {capabilities.has('operations') && (
+          <div className="course-ui-overviewActions">
+            {cachedCapabilities().has('operations') && (
               <button type="button" className="button buttonGhost" disabled={busy} onClick={() => navigate(`/${locale}/operations`)}>
                 {L('运营位', 'Operations')}
               </button>
@@ -463,15 +453,31 @@ function CourseManagementInner({ locale }: { locale: ReturnType<typeof useLocale
             <button type="button" className="button buttonGhost" disabled={busy} onClick={() => setShowCreate(true)}>
               {L('新建课程', 'Create course')}
             </button>
-            <button type="button" className="button buttonGhost" disabled={busy} onClick={() => rawFileRef.current?.click()}>
-              {L('导入原始素材（.zip）', 'Import raw materials (.zip)')}
-            </button>
-            <button type="button" className="button buttonGhost" disabled={busy} onClick={() => void importFromServerFolder()}>
-              {L('本地目录导入', 'Import from server folder')}
-            </button>
-            <button type="button" className="button" disabled={busy} onClick={() => setShowImport(true)}>
-              {L('导入课程包', 'Import course package')}
-            </button>
+            <div className="course-ui-importAnchor">
+              <button
+                type="button"
+                className="button"
+                aria-haspopup="menu"
+                aria-expanded={importMenuOpen}
+                disabled={busy}
+                onClick={() => setImportMenuOpen((current) => !current)}
+              >
+                {L('导入', 'Import')} ▾
+              </button>
+              {importMenuOpen && (
+                <div role="menu" aria-label={L('导入', 'Import')} className="course-ui-importMenu">
+                  <button type="button" role="menuitem" className="button buttonGhost" onClick={() => { setImportMenuOpen(false); setShowImport(true) }}>
+                    {L('导入课程包', 'Import course package')}
+                  </button>
+                  <button type="button" role="menuitem" className="button buttonGhost" onClick={() => { setImportMenuOpen(false); rawFileRef.current?.click() }}>
+                    {L('导入原始素材（.zip）', 'Import raw materials (.zip)')}
+                  </button>
+                  <button type="button" role="menuitem" className="button buttonGhost" onClick={() => { setImportMenuOpen(false); void importFromServerFolder() }}>
+                    {L('本地目录导入', 'Import from server folder')}
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
         )}
         <input
@@ -484,24 +490,22 @@ function CourseManagementInner({ locale }: { locale: ReturnType<typeof useLocale
             if (file) void onPickRawFile(file)
           }}
         />
-      </header>
+      </div>
 
-      <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginTop: 12 }}>
-        <label style={{ fontSize: 13 }}>
-          {L('分类', 'Category')}{' '}
-          <select
-            value={categoryId}
-            onChange={(event) => {
-              setCategoryId(event.target.value)
-              setPage(1)
-            }}
-            style={{ padding: 7, borderRadius: 8 }}
-          >
-            <option value="">{L('全部分类', 'All categories')}</option>
-            {categories.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
-          </select>
-        </label>
-        <button type="button" className="button buttonGhost" disabled={loading} onClick={() => void load()}>{L('刷新', 'Refresh')}</button>
+      <div className="course-ui-overviewFilters">
+        <select
+          className="filterSelect"
+          aria-label={L('分类', 'Category')}
+          value={categoryId}
+          onChange={(event) => {
+            setCategoryId(event.target.value)
+            setPage(1)
+          }}
+        >
+          <option value="">{L('全部分类', 'All categories')}</option>
+          {categories.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
+        </select>
+        <button type="button" className="button buttonGhost buttonCompact" disabled={loading} onClick={() => void load()}>{L('刷新', 'Refresh')}</button>
       </div>
 
       {message && (() => {
@@ -691,7 +695,7 @@ function CourseManagementInner({ locale }: { locale: ReturnType<typeof useLocale
       {loading && <p className="cardBody">{t(locale, 'common.loading')}</p>}
 
       {list && (
-        <div className="tableWrap" style={{ marginTop: 16 }}>
+        <div className="tableWrap course-ui-overviewTable" data-testid="course-overview-table-wrap">
           <table className="table" style={courseTable.tableStyle}>
             {courseTable.colGroup}
             <thead>
@@ -802,17 +806,19 @@ function CourseManagementInner({ locale }: { locale: ReturnType<typeof useLocale
         </div>
       )}
 
-      <Pagination
-        locale={locale}
-        page={list?.page ?? page}
-        pageSize={pageSize}
-        total={list ? list.total : null}
-        onPageChange={setPage}
-        onPageSizeChange={(size) => {
-          setPageSize(size)
-          setPage(1)
-        }}
-      />
+      <div className="course-ui-paginationWrap" data-testid="course-overview-pagination">
+        <Pagination
+          locale={locale}
+          page={list?.page ?? page}
+          pageSize={pageSize}
+          total={list ? list.total : null}
+          onPageChange={setPage}
+          onPageSizeChange={(size) => {
+            setPageSize(size)
+            setPage(1)
+          }}
+        />
+      </div>
     </section>
   )
 }

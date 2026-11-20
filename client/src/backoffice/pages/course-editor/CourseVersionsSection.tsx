@@ -2,14 +2,14 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { CourseDetail, CourseVersion, HistoryPage, IncompleteLesson, PortalPreviewLink } from '../../contracts/course';
 import { boRequest } from '../../lib/api';
+import { cachedPreviewEntry } from '../../lib/capabilities';
 import { failureCode } from '../../lib/courseErrors';
 import { useReportFailure } from './feedback';
 import { t } from '../../lib/i18n/messages';
 import { serverText } from '../../lib/i18n/serverText';
-import { cachedPreviewEntry } from '../../lib/capabilities';
 import { useResizableColumns } from '../../components/resizableColumns';
 import { Field, Modal } from './shared';
-import { L, buttonStyle, card, dangerBtn, fmtDate, inputStyle, liveStatusLabel, primaryBtn } from './shared-utils';
+import { L, buttonStyle, dangerBtn, fmtDate, inputStyle, liveStatusLabel, primaryBtn } from './shared-utils';
 import { historyActionLabel, historyDetailText } from './versionHistory';
 
 
@@ -43,6 +43,9 @@ export function CourseVersionsSection({
   canPublish?: boolean;
 }) {
   const navigate = useNavigate();
+  // 预览入口（PREVIEW_ENTRY）：learner = 上游学员视角预览；portal = 生产投影渲染草稿（带版本）。
+  const previewEntry = cachedPreviewEntry();
+  const [previewOpeningId, setPreviewOpeningId] = useState<string | null>(null);
   const reportFailure = useReportFailure();
   const [publishOpen, setPublishOpen] = useState(false);
   const [blocked, setBlocked] = useState<{ codes: string[]; lessons: IncompleteLesson[] } | null>(null);
@@ -57,9 +60,6 @@ export function CourseVersionsSection({
   const [importBusy, setImportBusy] = useState(false);
   const [exportVersion, setExportVersion] = useState('live');
   const [exportBusy, setExportBusy] = useState(false);
-  // 预览入口（PREVIEW_ENTRY）：learner = 上游学员视角预览页；portal = 生产投影渲染草稿（带 versionId）。
-  const previewEntry = cachedPreviewEntry();
-  const [previewOpeningId, setPreviewOpeningId] = useState<string | null>(null);
 
   const liveVersion = versions.find((version) => version.isLive);
   const sortedVersions = [...versions].sort((a, b) => b.versionNo - a.versionNo);
@@ -214,6 +214,17 @@ export function CourseVersionsSection({
     ? null
     : { codes: course.completeness.publishBlockerCodes ?? [], lessons: course.completeness.incompleteLessons ?? [] };
   const shownBlocked = blocked ?? serverBlocked;
+  const gaps = [
+    !course.completeness.steps.courseInformation.complete ? L(locale, '课程信息', 'Course Information') : null,
+    ...(course.completeness.incompleteLessons ?? []).map(
+      (lesson) => `${L(locale, '课程内容', 'Course Content')}: ${t(asLoc(locale), 'course.ui.blockedLesson', {
+        position: String(lesson.position),
+        code: lesson.code,
+        parts: lesson.parts.map((part) => t(asLoc(locale), `course.ui.part${part}`)).join(locale.startsWith('zh') ? '、' : ', '),
+      })}`,
+    ),
+    !course.completeness.steps.trial.complete ? L(locale, '试看设置', 'Trial') : null,
+  ].filter(Boolean) as string[];
 
   async function openVersionPreview(version: CourseVersion) {
     if (previewEntry !== 'portal') {
@@ -242,141 +253,167 @@ export function CourseVersionsSection({
     }
     window.open(result.data.url, '_blank', 'noopener,noreferrer');
   }
-  const gaps = [
-    !course.completeness.steps.courseInformation.complete ? L(locale, '课程信息', 'Course Information') : null,
-    ...(course.completeness.incompleteLessons ?? []).map(
-      (lesson) => `${L(locale, '课程内容', 'Course Content')}: ${t(asLoc(locale), 'course.ui.blockedLesson', {
-        position: String(lesson.position),
-        code: lesson.code,
-        parts: lesson.parts.map((part) => t(asLoc(locale), `course.ui.part${part}`)).join(locale.startsWith('zh') ? '、' : ', '),
-      })}`,
-    ),
-    !course.completeness.steps.trial.complete ? L(locale, '试看设置', 'Trial') : null,
-  ].filter(Boolean) as string[];
+
+  const [segment, setSegment] = useState<'current' | 'versions' | 'history'>('current');
 
   return (
-    <div>
-      <div style={card}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
-          <div>
-            <h2 style={{ margin: 0, fontSize: 18 }}>{L(locale, '当前', 'Current')}</h2>
-            <p style={{ margin: '6px 0 0', fontSize: 12, opacity: 0.65 }}>{L(locale, '草稿 + 线上版本。发布和状态操作都在此页。', 'Draft and live version. Publish and status actions are on this page.')}</p>
-          </div>
-        </div>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginTop: 14 }}>
-          <div style={{ border: '1px solid #E8EDF5', borderRadius: 10, padding: 14 }}>
-            <div style={{ fontWeight: 700, marginBottom: 6 }}>{L(locale, '草稿', 'DRAFT')}</div>
-            <div style={{ fontSize: 13 }}>
-              {course.hasDraft ? L(locale, '未发布', 'Not published') : L(locale, '无草稿', 'No draft')}
-              {course.hasDraft ? ` · ${L(locale, `已完成 ${course.completeness.completedSteps}/3 步`, `${course.completeness.completedSteps} of 3 steps complete`)}` : ''}
-            </div>
-            {canPublish && <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
-              <button type="button" style={primaryBtn} data-testid="publish-open" disabled={busy || !course.hasDraft} onClick={() => { setBlocked(null); setPublishOpen(true); }}>
-                {L(locale, '发布', 'Publish')}
-              </button>
-              <button type="button" style={dangerBtn} disabled={busy || !course.hasDraft || !liveVersion} onClick={() => setDeleteOpen(true)}>
-                {L(locale, '删除草稿', 'Delete draft')}
-              </button>
-              <button type="button" style={buttonStyle} disabled={busy} onClick={() => setImportOpen(true)}>
-                {L(locale, '导入课程包', 'Import package')}
-              </button>
-            </div>}
-          </div>
-          <div style={{ border: '1px solid #E8EDF5', borderRadius: 10, padding: 14 }}>
-            <div style={{ fontWeight: 700, marginBottom: 6 }}>{L(locale, '线上', 'LIVE')}</div>
-            <div style={{ fontSize: 13 }}>
-              {liveVersion ? `${liveVersion.versionLabel} · ${liveVersion.isLive ? L(locale, '线上', 'Live') : ''} · ${fmtDate(liveVersion.wentLiveAt ?? liveVersion.createdAt, locale)}` : L(locale, '从未发布', 'Not published')}
-            </div>
-            <div style={{ fontSize: 12, color: '#5A6577', marginTop: 4 }}>{liveStatusLabel(locale, course.liveStatus)}</div>
-            {canPublish && <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
-              <button type="button" style={buttonStyle} disabled={busy || !liveVersion} onClick={() => { setStatusTarget(course.liveStatus === 'ONLINE' ? 'HIDDEN' : 'ONLINE'); setStatusOpen(true); }}>
-                {L(locale, '更改状态', 'Change status')}
-              </button>
-              <button type="button" style={buttonStyle} disabled={busy || !liveVersion || exportBusy} onClick={() => void exportPackage()}>
-                {exportBusy ? L(locale, '导出中…', 'Exporting…') : L(locale, '导出课程包', 'Export package')}
-              </button>
-            </div>}
-            {canPublish && <div style={{ marginTop: 8 }}>
-              <label style={{ fontSize: 12 }}>{L(locale, '导出版本', 'Export version')}</label>
-              <select value={exportVersion} onChange={(event) => setExportVersion(event.target.value)} style={{ marginLeft: 8, padding: 4 }}>
-                <option value="live">{L(locale, '线上版本', 'Live')}</option>
-                <option value="working">{L(locale, '草稿', 'Working')}</option>
-              </select>
-            </div>}
-          </div>
-        </div>
+    <div className="course-ui-versions" data-testid="versions-section">
+      <div className="course-ui-segments" role="group" aria-label={L(locale, '版本与发布分段', 'Versions and publishing sections')}>
+        <button type="button" className="course-ui-segment" aria-pressed={segment === 'current'} data-testid="versions-segment-current" onClick={() => setSegment('current')}>
+          {L(locale, '当前', 'Current')}
+        </button>
+        <button type="button" className="course-ui-segment" aria-pressed={segment === 'versions'} data-testid="versions-segment-versions" onClick={() => setSegment('versions')}>
+          {L(locale, '版本', 'Versions')}
+        </button>
+        <button type="button" className="course-ui-segment" aria-pressed={segment === 'history'} data-testid="versions-segment-history" onClick={() => setSegment('history')}>
+          {L(locale, '历史记录', 'History')}
+        </button>
       </div>
 
-      <div style={card}>
-        <h2 style={{ margin: 0, fontSize: 18 }}>{L(locale, '版本', 'Versions')}</h2>
-        <table className="table" style={{ ...versionsTable.tableStyle, marginTop: 12 }}>
-          {versionsTable.colGroup}
-          <thead>
-            <tr>
-              <th>{L(locale, '版本', 'Version')}{versionsTable.resizeHandle(0)}</th>
-              <th>{L(locale, '发布时间', 'Published')}{versionsTable.resizeHandle(1)}</th>
-              <th>{L(locale, '来源', 'Source')}{versionsTable.resizeHandle(2)}</th>
-              <th>{L(locale, '操作', 'Actions')}{versionsTable.resizeHandle(3)}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {sortedVersions.map((version) => (
-              <tr key={version.id}>
-                <td>{version.versionLabel}{version.isLive ? ` · ${L(locale, '线上', 'Live')}` : ''}</td>
-                <td>{fmtDate(version.wentLiveAt ?? version.createdAt, locale)}</td>
-                <td>{version.sourceVersionLabel ?? version.sourceEnvironment ?? '—'}</td>
-                <td>
-                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                    <button
-                      type="button"
-                      style={buttonStyle}
-                      disabled={previewOpeningId === version.id}
-                      onClick={() => void openVersionPreview(version)}
-                    >
-                      {previewOpeningId === version.id ? L(locale, '打开中…', 'Opening…') : L(locale, '查看', 'View')}
-                    </button>
-                    {canPublish && !version.isLive && <button type="button" style={buttonStyle} disabled={busy} onClick={() => setRestoreVersion(version)}>{L(locale, '恢复', 'Restore')}</button>}
-                  </div>
-                </td>
-              </tr>
-            ))}
-            {sortedVersions.length === 0 && <tr><td colSpan={4} style={{ textAlign: 'center', padding: 18, opacity: 0.7 }}>{L(locale, '暂无版本。', 'No versions yet.')}</td></tr>}
-          </tbody>
-        </table>
-      </div>
-
-      <div style={card}>
-        <h2 style={{ margin: 0, fontSize: 18 }}>{L(locale, '历史记录', 'History')}</h2>
-        <table className="table" style={{ ...historyTable.tableStyle, marginTop: 12 }}>
-          {historyTable.colGroup}
-          <thead>
-            <tr>
-              <th>{L(locale, '时间', 'Time')}{historyTable.resizeHandle(0)}</th>
-              <th>{L(locale, '操作人', 'Operator')}{historyTable.resizeHandle(1)}</th>
-              <th>{L(locale, '操作', 'Action')}{historyTable.resizeHandle(2)}</th>
-              <th style={{ textAlign: 'left' }}>{L(locale, '详情', 'Detail')}{historyTable.resizeHandle(3)}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {(history?.items ?? []).map((item) => (
-              <tr key={item.id}>
-                <td>{fmtDate(item.time, locale)}</td>
-                <td>{item.operator}</td>
-                <td>{historyActionLabel(item.action, locale)}{item.versionNo ? <span style={{ opacity: 0.6 }}> · v{item.versionNo}</span> : null}</td>
-                <td className="cellWrap" style={{ fontSize: 12, opacity: 0.8 }}>{historyDetailText(item, locale)}</td>
-              </tr>
-            ))}
-            {(history?.items.length ?? 0) === 0 && <tr><td colSpan={4} style={{ textAlign: 'center', padding: 18, opacity: 0.7 }}>{L(locale, '暂无记录。', 'No history yet.')}</td></tr>}
-          </tbody>
-        </table>
-        {history && history.pages > 1 && (
-          <div style={{ display: 'flex', gap: 8, marginTop: 12, justifyContent: 'center' }}>
-            <button type="button" style={buttonStyle} disabled={historyPage <= 1} onClick={() => setHistoryPage(Math.max(1, historyPage - 1))}>←</button>
-            <span style={{ fontSize: 13, alignSelf: 'center' }}>{history.page} / {history.pages}</span>
-            <button type="button" style={buttonStyle} disabled={historyPage >= history.pages} onClick={() => setHistoryPage(Math.min(history.pages, historyPage + 1))}>→</button>
+      {segment === 'current' && (
+        <div className="course-ui-segmentPanel isScrollable" data-testid="versions-current">
+          <div className="course-ui-currentGrid">
+            <div className="course-ui-currentCard" data-testid="versions-current-draft">
+              <span className="course-ui-cardLabel">{L(locale, '草稿', 'DRAFT')}</span>
+              <div className="course-ui-cardLine">
+                <span className="course-ui-summaryStrong">
+                  {course.hasDraft ? L(locale, '未发布', 'Not published') : L(locale, '无草稿', 'No draft')}
+                </span>
+                {course.hasDraft && (
+                  <span>{L(locale, `已完成 ${course.completeness.completedSteps}/3 步`, `${course.completeness.completedSteps} of 3 steps complete`)}</span>
+                )}
+              </div>
+              {canPublish && <div className="course-ui-cardActions">
+                <button type="button" style={primaryBtn} data-testid="publish-open" disabled={busy || !course.hasDraft} onClick={() => { setBlocked(null); setPublishOpen(true); }}>
+                  {L(locale, '发布', 'Publish')}
+                </button>
+                <button type="button" style={dangerBtn} disabled={busy || !course.hasDraft || !liveVersion} onClick={() => setDeleteOpen(true)}>
+                  {L(locale, '删除草稿', 'Delete draft')}
+                </button>
+                <button type="button" style={buttonStyle} disabled={busy} onClick={() => setImportOpen(true)}>
+                  {L(locale, '导入课程包', 'Import package')}
+                </button>
+              </div>}
+            </div>
+            <div className="course-ui-currentCard isLive" data-testid="versions-current-live">
+              <span className="course-ui-cardLabel">{L(locale, '线上', 'LIVE')}</span>
+              <div className="course-ui-cardLine">
+                {liveVersion ? (
+                  <>
+                    <span className={`course-ui-statusDot ${course.liveStatus === 'ONLINE' ? 'isOnline' : course.liveStatus === 'HIDDEN' ? 'isHidden' : 'isOffline'}`} aria-hidden="true" />
+                    <span className="course-ui-summaryStrong">{liveStatusLabel(locale, course.liveStatus)}</span>
+                    <span>{liveVersion.versionLabel}</span>
+                    <span className="course-ui-summarySep">·</span>
+                    <span>{fmtDate(liveVersion.wentLiveAt ?? liveVersion.createdAt, locale)}</span>
+                  </>
+                ) : (
+                  <span>{L(locale, '从未发布', 'Not published')}</span>
+                )}
+              </div>
+              {canPublish && <div className="course-ui-cardActions">
+                <button type="button" style={buttonStyle} disabled={busy || !liveVersion} onClick={() => { setStatusTarget(course.liveStatus === 'ONLINE' ? 'HIDDEN' : 'ONLINE'); setStatusOpen(true); }}>
+                  {L(locale, '更改状态', 'Change status')}
+                </button>
+                <button type="button" style={buttonStyle} disabled={busy || !liveVersion || exportBusy} onClick={() => void exportPackage()}>
+                  {exportBusy ? L(locale, '导出中…', 'Exporting…') : L(locale, '导出课程包', 'Export package')}
+                </button>
+              </div>}
+              {canPublish && <div className="course-ui-cardLine">
+                <label style={{ fontSize: 12 }}>{L(locale, '导出版本', 'Export version')}</label>
+                <select value={exportVersion} onChange={(event) => setExportVersion(event.target.value)}>
+                  <option value="live">{L(locale, '线上版本', 'Live')}</option>
+                  <option value="working">{L(locale, '草稿', 'Working')}</option>
+                </select>
+              </div>}
+            </div>
           </div>
-        )}
-      </div>
+        </div>
+      )}
+
+      {segment === 'versions' && (
+        <div className="course-ui-segmentPanel" data-testid="versions-list">
+          <div className="course-ui-segmentHead">
+            <h2 className="course-ui-sectionTitle">{L(locale, '版本', 'Versions')}</h2>
+            <span className="course-ui-sectionHint">{L(locale, '最新在前。查看 = 打开该版本；恢复 = 复制到草稿。', 'Newest first. View opens that version; Restore copies it into the draft.')}</span>
+          </div>
+          <div className="tableWrap course-ui-tableWrap" data-testid="versions-list-scroll">
+            <table className="table" style={versionsTable.tableStyle}>
+              {versionsTable.colGroup}
+              <thead>
+                <tr>
+                  <th>{L(locale, '版本', 'Version')}{versionsTable.resizeHandle(0)}</th>
+                  <th>{L(locale, '发布时间', 'Published')}{versionsTable.resizeHandle(1)}</th>
+                  <th>{L(locale, '来源', 'Source')}{versionsTable.resizeHandle(2)}</th>
+                  <th>{L(locale, '操作', 'Actions')}{versionsTable.resizeHandle(3)}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sortedVersions.map((version) => (
+                  <tr key={version.id}>
+                    <td>{version.versionLabel}{version.isLive ? ` · ${L(locale, '线上', 'Live')}` : ''}</td>
+                    <td>{fmtDate(version.wentLiveAt ?? version.createdAt, locale)}</td>
+                    <td>{version.sourceVersionLabel ?? version.sourceEnvironment ?? '—'}</td>
+                    <td>
+                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                        <button
+                          type="button"
+                          style={buttonStyle}
+                          disabled={previewOpeningId === version.id}
+                          onClick={() => void openVersionPreview(version)}
+                        >
+                          {previewOpeningId === version.id ? L(locale, '打开中…', 'Opening…') : L(locale, '查看', 'View')}
+                        </button>
+                        {canPublish && !version.isLive && <button type="button" style={buttonStyle} disabled={busy} onClick={() => setRestoreVersion(version)}>{L(locale, '恢复', 'Restore')}</button>}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+                {sortedVersions.length === 0 && <tr><td colSpan={4} style={{ textAlign: 'center', padding: 18, opacity: 0.7 }}>{L(locale, '暂无版本。', 'No versions yet.')}</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {segment === 'history' && (
+        <div className="course-ui-segmentPanel" data-testid="versions-history">
+          <div className="course-ui-segmentHead">
+            <h2 className="course-ui-sectionTitle">{L(locale, '历史记录', 'History')}</h2>
+            <span className="course-ui-sectionHint">{L(locale, '只读 —— 每次发布、导入、导出、恢复与状态变更。', 'Read-only — every publish, import, export, restore and status change.')}</span>
+          </div>
+          <div className="tableWrap course-ui-tableWrap" data-testid="versions-history-scroll">
+            <table className="table" style={historyTable.tableStyle}>
+              {historyTable.colGroup}
+              <thead>
+                <tr>
+                  <th>{L(locale, '时间', 'Time')}{historyTable.resizeHandle(0)}</th>
+                  <th>{L(locale, '操作人', 'Operator')}{historyTable.resizeHandle(1)}</th>
+                  <th>{L(locale, '操作', 'Action')}{historyTable.resizeHandle(2)}</th>
+                  <th style={{ textAlign: 'left' }}>{L(locale, '详情', 'Detail')}{historyTable.resizeHandle(3)}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(history?.items ?? []).map((item) => (
+                  <tr key={item.id}>
+                    <td>{fmtDate(item.time, locale)}</td>
+                    <td>{item.operator}</td>
+                    <td>{historyActionLabel(item.action, locale)}{item.versionNo ? <span style={{ opacity: 0.6 }}> · v{item.versionNo}</span> : null}</td>
+                    <td className="cellWrap" style={{ fontSize: 12, opacity: 0.8 }}>{historyDetailText(item, locale)}</td>
+                  </tr>
+                ))}
+                {(history?.items.length ?? 0) === 0 && <tr><td colSpan={4} style={{ textAlign: 'center', padding: 18, opacity: 0.7 }}>{L(locale, '暂无记录。', 'No history yet.')}</td></tr>}
+              </tbody>
+            </table>
+          </div>
+          {history && history.pages > 1 && (
+            <div className="course-ui-historyPager" data-testid="versions-history-pagination">
+              <button type="button" style={buttonStyle} disabled={historyPage <= 1} onClick={() => setHistoryPage(Math.max(1, historyPage - 1))}>←</button>
+              <span className="course-ui-pagerLabel">{history.page} / {history.pages}</span>
+              <button type="button" style={buttonStyle} disabled={historyPage >= history.pages} onClick={() => setHistoryPage(Math.min(history.pages, historyPage + 1))}>→</button>
+            </div>
+          )}
+        </div>
+      )}
 
       {publishOpen && (
         <Modal title={L(locale, '发布', 'Publish')} onClose={() => setPublishOpen(false)}>

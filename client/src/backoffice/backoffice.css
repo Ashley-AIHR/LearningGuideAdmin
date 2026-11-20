@@ -1572,3 +1572,568 @@ body.tableColResizing {
   height: 100vh;
   color: var(--lg-muted);
 }
+
+/* ======================== 课程页布局（Course UI UX / RWD） ========================
+   设计依据：docs/Course_Editor_UIUX_Redesign.md（Figma 1672×941 三屏）。
+   骨架：固定页头 → 一行状态摘要 → 吸顶页签 → 面板区。
+   契约：页面本体不滚动（文档 / .content / 卡片三层都不滚），长内容只在面板内部滚动；
+   grid 分栏一律 minmax(0, 1fr)，断点 1400 / 1100 / 900 与壳层一致，<1100 纵向折叠。
+   仅课程编辑页 / 课程列表页使用（course-ui 前缀），不影响其他模块。 */
+
+/* ---- 课程编辑页：固定卡片骨架 ---- */
+.course-ui-page {
+  position: relative;
+  /* 取代整卡片 overflow:auto：滚动交给页签内的各个面板 */
+  overflow: hidden;
+  padding: 18px 24px 14px;
+  gap: 0;
+}
+
+.course-ui-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  flex: 0 0 auto;
+}
+
+.course-ui-headMain {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  min-width: 0;
+}
+
+.course-ui-headTitles {
+  min-width: 0;
+}
+
+.course-ui-title {
+  margin: 0;
+  font-size: 26px;
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+  color: var(--lg-heading);
+  overflow-wrap: anywhere;
+}
+
+.course-ui-meta {
+  margin-top: 4px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 10px;
+  font-size: 12px;
+  color: var(--lg-muted);
+}
+
+.course-ui-headActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.course-ui-back {
+  white-space: nowrap;
+}
+
+/* ---- 一行状态摘要（状态只在这里出现一次） ---- */
+.course-ui-summary {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+  padding: 8px 14px;
+  border: 1px solid var(--lg-line-soft);
+  border-radius: 10px;
+  background: #fbfcfe;
+  font-size: 13px;
+  color: var(--lg-slate-soft);
+  min-height: 40px;
+}
+
+.course-ui-summaryGroup {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.course-ui-summaryLabel {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--lg-muted);
+}
+
+.course-ui-summaryStrong {
+  font-weight: 600;
+  color: var(--lg-slate);
+}
+
+.course-ui-summaryDivider {
+  width: 1px;
+  align-self: stretch;
+  min-height: 20px;
+  background: var(--lg-line-soft);
+}
+
+.course-ui-summarySep {
+  color: var(--lg-faint);
+}
+
+.course-ui-statusDot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--lg-grey);
+  flex: 0 0 auto;
+}
+
+.course-ui-statusDot.isOnline {
+  background: var(--lg-green);
+}
+
+.course-ui-statusDot.isHidden {
+  background: var(--lg-amber);
+}
+
+.course-ui-statusDot.isOffline {
+  background: var(--lg-grey);
+}
+
+.course-ui-summaryLink {
+  margin-left: auto;
+  border: 0;
+  background: none;
+  padding: 0;
+  font: inherit;
+  font-size: 13px;
+  color: var(--lg-blue);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.course-ui-summaryLink:hover {
+  text-decoration: underline;
+}
+
+/* ---- 吸顶页签（只显示名称与完成标记） ---- */
+.course-ui-tabs {
+  position: sticky;
+  top: 0;
+  z-index: 6;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+  padding: 4px 0 0;
+  background: var(--lg-white);
+  border-bottom: 1px solid var(--lg-line-soft);
+}
+
+.course-ui-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 9px 12px 10px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--lg-muted);
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.course-ui-tab:hover {
+  color: var(--lg-heading);
+}
+
+.course-ui-tab[aria-pressed='true'] {
+  color: var(--lg-blue);
+  border-bottom-color: var(--lg-blue);
+  font-weight: 600;
+}
+
+.course-ui-tabIndex {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #eef2f7;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--lg-muted);
+}
+
+.course-ui-tab[aria-pressed='true'] .course-ui-tabIndex {
+  background: var(--lg-blue-soft);
+  color: var(--lg-blue);
+}
+
+.course-ui-tabMark {
+  font-size: 11px;
+  line-height: 1;
+  color: var(--lg-amber);
+}
+
+.course-ui-tabMark.isComplete {
+  color: var(--lg-green);
+}
+
+.course-ui-tabSpacer {
+  flex: 1 1 auto;
+}
+
+.course-ui-lang {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 2px 4px;
+  font-size: 12px;
+  color: var(--lg-muted);
+}
+
+.course-ui-lang select {
+  width: auto;
+}
+
+/* ---- 页签内容面板：给各 section 一个确定高度，滚动在 section 内部 ---- */
+.course-ui-panel {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  padding-top: 12px;
+}
+
+.course-ui-panel > * {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.course-ui-alert {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.course-ui-alert.isStale {
+  background: #fff6e5;
+  border: 1px solid #f2d49b;
+}
+
+.course-ui-alert.isFailure {
+  background: #fdecec;
+  color: #b42318;
+}
+
+/* ---- 版本与发布：Current / Versions / History 分段（不纵向堆叠） ---- */
+.course-ui-versions {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+}
+
+.course-ui-segments {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-self: flex-start;
+  gap: 4px;
+  padding: 3px;
+  border-radius: 9px;
+  background: #f1f5f9;
+}
+
+.course-ui-segment {
+  border: 0;
+  background: transparent;
+  border-radius: 7px;
+  padding: 6px 16px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--lg-muted);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.course-ui-segment:hover {
+  color: var(--lg-heading);
+}
+
+.course-ui-segment[aria-pressed='true'] {
+  background: var(--lg-white);
+  color: var(--lg-heading);
+  font-weight: 600;
+  box-shadow: var(--lg-shadow-sm);
+}
+
+.course-ui-segmentPanel {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin-top: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.course-ui-segmentPanel.isScrollable {
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.course-ui-currentGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  align-content: start;
+}
+
+.course-ui-currentCard {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px;
+  border: 1px solid var(--lg-line-soft);
+  border-radius: 12px;
+  background: var(--lg-white);
+}
+
+.course-ui-currentCard.isLive {
+  background: #fbfcfe;
+}
+
+.course-ui-cardLabel {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--lg-muted);
+}
+
+.course-ui-cardLine {
+  font-size: 13px;
+  color: var(--lg-slate-soft);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.course-ui-cardActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+.course-ui-cardActions select {
+  padding: 6px 8px;
+  border: 1px solid var(--lg-line-soft);
+  border-radius: 8px;
+  font: inherit;
+  font-size: 13px;
+}
+
+.course-ui-segmentHead {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.course-ui-sectionTitle {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--lg-heading);
+}
+
+.course-ui-sectionHint {
+  font-size: 12px;
+  color: var(--lg-muted);
+}
+
+.course-ui-tableWrap {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.course-ui-historyPager {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--lg-line-soft);
+}
+
+.course-ui-pagerLabel {
+  font-size: 13px;
+  color: var(--lg-muted);
+}
+
+/* ---- 课程列表（Course Overview）：页头 / 筛选行 / 表格内滚动 / 分页固定底部 ---- */
+.course-ui-overview {
+  gap: 0;
+}
+
+.course-ui-overviewHead {
+  flex: 0 0 auto;
+  margin-bottom: 18px;
+}
+
+.course-ui-overviewHeadMain {
+  min-width: 0;
+}
+
+.course-ui-overviewActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.course-ui-overviewFilters {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+
+.course-ui-importAnchor {
+  position: relative;
+  display: inline-flex;
+}
+
+.course-ui-importMenu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  z-index: 20;
+  min-width: 230px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px;
+  border: 1px solid var(--lg-line-soft);
+  border-radius: 10px;
+  background: var(--lg-white);
+  box-shadow: var(--lg-shadow-lg);
+}
+
+.course-ui-importMenu button {
+  justify-content: flex-start;
+}
+
+.course-ui-overviewTable {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.course-ui-overviewNotice {
+  flex: 0 0 auto;
+}
+
+.course-ui-paginationWrap {
+  flex: 0 0 auto;
+}
+
+/* ---- 断点：1400 / 1100 / 900 与壳层一致 ---- */
+@media (max-width: 1400px) {
+  .course-ui-page {
+    padding: 16px 20px 12px;
+  }
+
+  .course-ui-title {
+    font-size: 24px;
+  }
+}
+
+@media (max-width: 1100px) {
+  /* <1100：分栏纵向折叠为单列（各自内部滚动），页签仍吸顶 */
+  .course-ui-currentGrid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .course-ui-headActions {
+    width: 100%;
+  }
+}
+
+@media (max-width: 900px) {
+  /* 壳层在 <900 把 .cardGrow 改为 auto 高度（页面滚动）；课程编辑页仍坚持页面不滚动：
+     卡片吃掉内容区剩余高度，滚动留在面板内部。 */
+  .course-ui-page {
+    flex: 1 1 0;
+    height: auto;
+    min-height: 0;
+    padding: 12px 14px 10px;
+  }
+
+  .course-ui-title {
+    font-size: 21px;
+  }
+
+  .course-ui-summaryDivider {
+    display: none;
+  }
+
+  .course-ui-summaryLink {
+    margin-left: 0;
+  }
+
+  .course-ui-overviewHead {
+    margin-bottom: 12px;
+  }
+}
+
+@media (max-height: 700px) {
+  .course-ui-page {
+    padding: 10px 14px 8px;
+  }
+
+  .course-ui-title {
+    font-size: 20px;
+  }
+
+  .course-ui-summary {
+    margin-top: 8px;
+    padding: 6px 10px;
+    min-height: 34px;
+  }
+
+  .course-ui-tabs {
+    margin-top: 2px;
+  }
+
+  .course-ui-panel {
+    padding-top: 8px;
+  }
+}
