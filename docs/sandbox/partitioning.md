@@ -40,7 +40,7 @@ flowchart LR
   E1 --> N1 & N2 & N3
   subgraph CH["内容通道"]
     P1["Sandbox 导出课程包（当前 v1：source.environment=Sandbox）"]
-    P2["Production 只导入（v2 provenance 门属 Part C 目标态，未接线）"]
+    P2["Production 只导入（v1 包；v2/provenance 不做）"]
   end
   P1 --> P2
 ```
@@ -123,7 +123,7 @@ Secrets  learning-guide/<admin/|>sandbox/<snake_case 键名>
 
 ### 5.3 冻结项（不改动）
 
-- **交付包规格**（`.lgcourse.zip` / manifest / import-export 格式）保持接手前原样。当前基线导出为 **v1 包**（`source.environment=Sandbox`、`sourceVersion`），**不含 v2 provenance**；v2 与 provenance 门属 Part C 目标态（未接线，黑盒 QA 已实测）。
+- **交付包规格**（`.lgcourse.zip` / manifest / import-export 格式）保持接手前原样。当前基线导出为 **v1 包**（`source.environment=Sandbox`、`sourceVersion`），**不含 v2 provenance**；v2 与 provenance 门按 owner 决定**不做**（范围外，交付以 v1 为准）。
 - **媒体上传规格**（格式白名单、大小上限、分块、时长探测、封面尺寸）保持接手前原样。
 - 课程管理底层不大改；上游已知行为（如 webm 无时长导致 Study 不完整、试看截止点为展示级）**记录不改**，见 `verify-takeover-20261116/upstream-preview-media-as-is.md`。
 
@@ -137,9 +137,9 @@ Secrets  learning-guide/<admin/|>sandbox/<snake_case 键名>
 4. `scripts/provision-admin-dev.mjs` 在 `ADMIN_ENV=sandbox` 时强制要求显式 `ADMIN_BRANCH`（无缺省分支），防止把 Sandbox 指向 dev/feature 代码。
 5. 验收：Portal `/api/health` 的 `version` == 最近一次生产发布 SHA（`sandbox` 分支快进目标；smoke `EXPECTED_VERSION`）；Admin 用 App Runner 部署记录核对。
 
-## 7. 两个 Part C 强制开关（规划契约，未接线；保持默认 off）
+## 7. 两个 Part C 强制开关（不做；保持默认 off）
 
-> 与 §5.1 的 `ADMIN_CAPABILITIES` 无关：模块裁剪已由能力门实现；这两个开关是内容能力/包来源的后续收紧，引入前不得在 Sandbox 打开。
+> 按 owner 2026-11-20 决定：Part C v2/provenance 为**范围外，不做**。模块裁剪已由 §5.1 的 `ADMIN_CAPABILITIES` 实现；这两个开关仅作历史契约记录，保持默认 off。
 
 | 开关 | 默认 | Sandbox | 生产/UAT |
 |---|---|---|---|

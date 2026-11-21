@@ -113,7 +113,7 @@
 ## 8. 目标流程（能力/来源开关启用后）
 
 1. Operator 在 **Sandbox** 创作并验证课程（前台 + Stripe 沙盒 + 播放复核）。
-2. Sandbox 导出课程包。**当前基线（87e0be2）实际导出 v1 包**：`source.environment=Sandbox`、`sourceVersion=X.Y`，**不含 v2 provenance**；`provenance.sourceEnv` 与来源门属 Part C 目标态（未接线，黑盒 QA 已实测导出为 v1、无 provenance 字段）。
+2. Sandbox 导出课程包。**当前基线（87e0be2）实际导出 v1 包**：`source.environment=Sandbox`、`sourceVersion=X.Y`，**不含 v2 provenance**；`provenance.sourceEnv` 与来源门按 owner 决定**不做**（v2/provenance 为范围外，交付以 v1 为准）。
 3. Production（UAT）**只导入**该包 → plan preview/approve → Publish → Change status。
 4. Production 禁止内容编辑/新建/结构变更（服务端 403 `CAPABILITY_DISABLED`）。
 5. 每次生产发布后，`sandbox` 分支快进到该生产发布 SHA（UAT=当前生产，同码）；修复合入上游 dev 后随下一次生产发布进入 Sandbox。

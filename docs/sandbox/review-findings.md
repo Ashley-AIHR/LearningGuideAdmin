@@ -10,7 +10,7 @@
 > | R2 | STILL_OPEN（Portal STRIPE_SANDBOX 仅 SIT/UAT） | **Portal 工作区已实现**：`isManagedEnvironment()` 含 SANDBOX，Stripe 沙盒强校验覆盖 SANDBOX；待提交/部署验证 | `/Users/nihao/AI infra/LearningGuidePortal/services/runtimeConfig.ts:12-16,95` |
 > | R3 | STILL_OPEN（provision 默认 dev 分支 + 自动部署 + DEV 桶） | **已修复**：sandbox 无缺省分支（`ADMIN_BRANCH` 必传）、`AutoDeploymentsEnabled=false`、`-sandbox-` 桶名 | `/Users/nihao/AI infra/LearningGuideAdmin/scripts/provision-admin-dev.mjs` |
 > | R4 | STILL_OPEN（verify 环境 SANDBOX 未注册） | **Portal 工作区已实现**：`environments.mjs` 注册 SANDBOX 条目；待提交/部署验证 | `/Users/nihao/AI infra/LearningGuidePortal/scripts/release/environments.mjs:47-62` |
-> | R5/R14 | STILL_OPEN（critical，Part C 键作用域） | 仍开放（Admin 产品代码，超出 Sandbox 部署写域） | 见 `verify-takeover-20261116/sandbox-prep-final-review.txt` |
+> | R5/R14 | OUT_OF_SCOPE（owner 决定不做 Part C v2/provenance） | 范围外，不修复；交付以 v1 包为准 | — |
 > | R6/R8/R19/D24/D25 | FIXED | 维持已修复 | 见正文 2026-11-15 复核表 |
 > | R7/R9/R10/R11/R12/R13/R15/R16/R20/R21 | STILL_OPEN | 仍开放（Admin 产品代码，超出 Sandbox 部署写域） | 同上 |
 > | R17/R18 | FIXED（2026-11-20） | 分块课程包导入（>200MB）与“仅线上版本导出”门禁已实现 | 见正文 R17/R18 |
