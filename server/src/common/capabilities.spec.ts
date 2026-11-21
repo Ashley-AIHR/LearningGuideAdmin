@@ -141,7 +141,9 @@ describe('能力门：路径前缀 → 能力映射表', () => {
     expect(capabilityForPath('/api/learning-access')).toEqual(['settings']);
 
     const accountsOnly = parseEnabledCapabilities('accounts');
-    expect(capabilityGateAllows('/api/admin/employees', accountsOnly)).toBe(true);
+    expect(capabilityGateAllows('/api/admin/employees', accountsOnly)).toBe(
+      true,
+    );
     expect(capabilityGateAllows('/api/learning-access', accountsOnly)).toBe(
       false,
     );

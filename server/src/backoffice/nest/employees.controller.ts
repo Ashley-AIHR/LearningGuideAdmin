@@ -148,9 +148,7 @@ export class BackofficeEmployeesController {
 
   /** owner 2026-11-20：账号级功能权限（catalog + 显式 grants + effective）。 */
   @Get(':employeeId/features')
-  async features(
-    @Param('employeeId', new ParseUUIDPipe()) employeeId: string,
-  ) {
+  async features(@Param('employeeId', new ParseUUIDPipe()) employeeId: string) {
     const view = await getEmployeeFeatures(
       employeeId,
       this.enabledCapabilities(),

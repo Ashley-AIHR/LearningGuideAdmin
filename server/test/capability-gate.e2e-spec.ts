@@ -136,20 +136,24 @@ describe('模块能力门（ADMIN_CAPABILITIES）HTTP 行为', () => {
     app = await createApp('course,accounts');
     const employees = await request(serverOf(app)).get('/api/admin/employees');
     expect(employees.status).toBe(200);
-    expect(employees.body.data).toEqual([{ id: 'e1' }]);
+    expect((employees.body as { data?: unknown }).data).toEqual([{ id: 'e1' }]);
 
     const learningAccess = await request(serverOf(app)).get(
       '/api/learning-access',
     );
     expect(learningAccess.status).toBe(404);
-    expect(learningAccess.body.error?.code).toBe('MODULE_NOT_ENABLED');
+    expect(
+      (learningAccess.body as { error?: { code?: string } }).error?.code,
+    ).toBe('MODULE_NOT_ENABLED');
 
     // 账号管理不再被 settings 能力覆盖
     await app.close();
     app = await createApp('course');
     const blocked = await request(serverOf(app)).get('/api/admin/employees');
     expect(blocked.status).toBe(404);
-    expect(blocked.body.error?.code).toBe('MODULE_NOT_ENABLED');
+    expect((blocked.body as { error?: { code?: string } }).error?.code).toBe(
+      'MODULE_NOT_ENABLED',
+    );
 
     await app.close();
     app = await createApp('settings');

@@ -49,7 +49,9 @@ describe('parseExportSelector — PRD §16.2 只导出当前线上版本', () =>
     expect(parseExportSelector(undefined)).toEqual({ kind: 'live' });
     expect(parseExportSelector({})).toEqual({ kind: 'live' });
     expect(parseExportSelector({ version: '' })).toEqual({ kind: 'live' });
-    expect(parseExportSelector({ version: ' live ' })).toEqual({ kind: 'live' });
+    expect(parseExportSelector({ version: ' live ' })).toEqual({
+      kind: 'live',
+    });
     expect(parseExportSelector({ version: 'LIVE' })).toEqual({
       kind: 'live',
     });
@@ -159,7 +161,10 @@ describe('PackageJobsService — 课程包分块会话（> 200 MB）', () => {
     );
     expect(result.jobId).toBeTruthy();
     expect(result.chunkSize).toBe(5 * MB);
-    const data = prisma.coursePackageJob.create.mock.calls[0][0].data;
+    const created = prisma.coursePackageJob.create.mock.calls[0] as unknown as [
+      { data: { stage: string; bytesTotal: number; courseId: string | null } },
+    ];
+    const data = created[0].data;
     expect(data.stage).toBe('UPLOADING_PACKAGE');
     expect(data.bytesTotal).toBe(1 * GB);
     expect(data.courseId).toBeNull();
@@ -186,7 +191,9 @@ describe('PackageJobsService — 课程包分块会话（> 200 MB）', () => {
       bytesTotal: 10,
       requestId: null,
     });
-    await expect(svc.appendPackageChunk('j1', 0, Buffer.from('x'))).rejects.toMatchObject({
+    await expect(
+      svc.appendPackageChunk('j1', 0, Buffer.from('x')),
+    ).rejects.toMatchObject({
       code: 'RAW_UPLOAD_NOT_ACTIVE',
       httpStatus: 409,
     });
@@ -240,7 +247,10 @@ describe('PackageJobsService — 分块拼包后直接校验（不做 Excel 转�
       getStaging: jest.fn().mockResolvedValue(Buffer.from('abc')),
       removeStaging: jest.fn().mockResolvedValue(undefined),
     };
-    const config = { packageMaxBytes: 8 * GB, packageDirectUploadBytes: 200 * MB };
+    const config = {
+      packageMaxBytes: 8 * GB,
+      packageDirectUploadBytes: 200 * MB,
+    };
     const svc = new PackageJobsService(
       prisma as never,
       storage as never,
@@ -251,15 +261,30 @@ describe('PackageJobsService — 分块拼包后直接校验（不做 Excel 转�
       config as never,
     );
     const validate = jest
-      .spyOn(svc as never as { runValidationFromFile: (...args: unknown[]) => Promise<void> }, 'runValidationFromFile')
-      .mockResolvedValue(undefined);
+      .spyOn(svc as never, 'runValidationFromFile')
+      .mockResolvedValue(undefined as never);
     await svc.completePackageUpload('j1');
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(storage.getStaging).toHaveBeenCalledTimes(2);
-    expect(validate).toHaveBeenCalledWith('j1', expect.stringContaining('package.zip'));
-    const update = prisma.coursePackageJob.update.mock.calls
-      .map((call) => call[0].data)
-      .find((data) => data.stage === 'VALIDATING');
+    expect(validate).toHaveBeenCalledWith(
+      'j1',
+      expect.stringContaining('package.zip'),
+    );
+    const updates = prisma.coursePackageJob.update.mock.calls.map(
+      (call) =>
+        (
+          call as unknown as [
+            {
+              data: {
+                stage?: string;
+                packageHash?: string;
+                bytesTotal?: number;
+              };
+            },
+          ]
+        )[0].data,
+    );
+    const update = updates.find((row) => row.stage === 'VALIDATING');
     expect(update?.packageHash).toMatch(/^[a-f0-9]{64}$/);
     expect(update?.bytesTotal).toBe(6 * MB);
   });

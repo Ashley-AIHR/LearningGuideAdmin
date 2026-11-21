@@ -40,7 +40,10 @@ export type EmployeeFeaturesView = {
 
 export type SaveEmployeeFeaturesOutcome =
   | { ok: true; view: EmployeeFeaturesView }
-  | { ok: false; code: Extract<ErrorCode, 'INVALID_INPUT' | 'PROTECTED_ADMIN_ACCOUNT'> };
+  | {
+      ok: false;
+      code: Extract<ErrorCode, 'INVALID_INPUT' | 'PROTECTED_ADMIN_ACCOUNT'>;
+    };
 
 const CATALOG_ORDER = new Map<FeatureKey, number>(
   FEATURE_CATALOG.map((entry, index) => [entry.key, index]),
@@ -197,7 +200,10 @@ export async function saveEmployeeFeatures(input: {
     ipAddress: input.ipAddress,
   });
 
-  return { ok: true, view: await buildView(employee, input.enabledCapabilities) };
+  return {
+    ok: true,
+    view: await buildView(employee, input.enabledCapabilities),
+  };
 }
 
 const requestGrantsCache = new WeakMap<object, Promise<FeatureGrantMap>>();

@@ -118,10 +118,10 @@ export function actionAllowedAtLevel(
       return level !== 'NONE';
     case 'EDIT_EXISTING':
       return level === 'EDIT' || level === 'FULL';
+    // 导入/导出沿用发布级基线：角色层面只有 Full 可以，账号开关再单独加减。
     case 'CREATE':
     case 'DELETE':
     case 'PUBLISH':
-    // 导入/导出沿用发布级基线：角色层面只有 Full 可以，账号开关再单独加减。
     case 'IMPORT':
     case 'EXPORT':
       return level === 'FULL';

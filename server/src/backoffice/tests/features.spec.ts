@@ -3,7 +3,6 @@ import assert from 'node:assert/strict';
 import {
   ALL_CAPABILITIES,
   parseEnabledCapabilities,
-  type CapabilityId,
 } from '../../common/capabilities';
 import type { EmployeeRole } from '../contracts/employee';
 import {
@@ -34,9 +33,8 @@ import type { ActionKind } from '../modules/rbac/permissions';
  */
 
 const grants = (): Map<FeatureKey, boolean> => new Map();
-const withGrant = (
-  entries: Array<[FeatureKey, boolean]>,
-): FeatureGrantMap => new Map(entries);
+const withGrant = (entries: Array<[FeatureKey, boolean]>): FeatureGrantMap =>
+  new Map(entries);
 
 describe('FEATURE_CATALOG 单一事实来源', () => {
   it('exports exactly the approved module and course-action keys in fixed order', () => {
@@ -73,7 +71,10 @@ describe('FEATURE_CATALOG 单一事实来源', () => {
 
   it('groups every key and keeps sortOrder ascending inside each group', () => {
     for (const entry of FEATURE_CATALOG) {
-      assert.ok(entry.group === 'module' || entry.group === 'course', entry.key);
+      assert.ok(
+        entry.group === 'module' || entry.group === 'course',
+        entry.key,
+      );
       assert.equal(
         entry.group,
         entry.key.startsWith('module.') ? 'module' : 'course',
@@ -83,13 +84,17 @@ describe('FEATURE_CATALOG 单一事实来源', () => {
       const orders = FEATURE_CATALOG.filter((e) => e.group === group).map(
         (e) => e.sortOrder,
       );
-      assert.deepEqual(orders, [...orders].sort((a, b) => a - b));
+      assert.deepEqual(
+        orders,
+        [...orders].sort((a, b) => a - b),
+      );
       assert.equal(new Set(orders).size, orders.length);
     }
   });
 
   it('recognises catalogue keys only (anything else is rejected)', () => {
-    for (const entry of FEATURE_CATALOG) assert.equal(isFeatureKey(entry.key), true);
+    for (const entry of FEATURE_CATALOG)
+      assert.equal(isFeatureKey(entry.key), true);
     for (const bad of [
       'module',
       'module.unknown',
@@ -116,15 +121,30 @@ describe('module level: environment ∩ role ∩ grant', () => {
       'FULL',
     );
     assert.equal(
-      effectiveMenuLevel('GRAPHIC_DESIGNER', 'course', grants(), ALL_CAPABILITIES),
+      effectiveMenuLevel(
+        'GRAPHIC_DESIGNER',
+        'course',
+        grants(),
+        ALL_CAPABILITIES,
+      ),
       'EDIT',
     );
     assert.equal(
-      effectiveMenuLevel('COURSE_CREATOR', 'course', grants(), ALL_CAPABILITIES),
+      effectiveMenuLevel(
+        'COURSE_CREATOR',
+        'course',
+        grants(),
+        ALL_CAPABILITIES,
+      ),
       'VIEW',
     );
     assert.equal(
-      effectiveMenuLevel('OPERATION_ADMIN', 'knowledge', grants(), ALL_CAPABILITIES),
+      effectiveMenuLevel(
+        'OPERATION_ADMIN',
+        'knowledge',
+        grants(),
+        ALL_CAPABILITIES,
+      ),
       'NONE',
     );
   });
@@ -222,11 +242,21 @@ describe('module level: environment ∩ role ∩ grant', () => {
 
   it('accounts is Admin baseline; grants can only remove it (PRD §3.3)', () => {
     assert.equal(
-      effectiveModuleLevel('ADMIN', 'module.accounts', grants(), ALL_CAPABILITIES),
+      effectiveModuleLevel(
+        'ADMIN',
+        'module.accounts',
+        grants(),
+        ALL_CAPABILITIES,
+      ),
       'FULL',
     );
     assert.equal(
-      effectiveModuleLevel('FINANCE', 'module.accounts', grants(), ALL_CAPABILITIES),
+      effectiveModuleLevel(
+        'FINANCE',
+        'module.accounts',
+        grants(),
+        ALL_CAPABILITIES,
+      ),
       'NONE',
     );
     // PRD §3.3 的硬边界：module 通用「允许可越过 NONE」不适用于 accounts
@@ -319,7 +349,11 @@ describe('course actions: role baseline overridden per action', () => {
       true,
     );
     assert.equal(
-      level('COURSE_CREATOR', 'EDIT_EXISTING', withGrant([['course.edit', true]])),
+      level(
+        'COURSE_CREATOR',
+        'EDIT_EXISTING',
+        withGrant([['course.edit', true]]),
+      ),
       true,
     );
     assert.equal(
@@ -510,7 +544,9 @@ describe('resolveEffectiveFeatures', () => {
       ]),
       enabledCapabilities: parseEnabledCapabilities('course,accounts'),
     });
-    const allowed = effective.filter((entry) => entry.allowed).map((e) => e.key);
+    const allowed = effective
+      .filter((entry) => entry.allowed)
+      .map((e) => e.key);
     assert.ok(!allowed.includes('module.helpdesk'));
     assert.ok(!allowed.includes('module.knowledge'));
     // course 能力在 sandbox 里是开着的：动作开关照常生效
@@ -555,11 +591,21 @@ describe('角色基线展示与路由级课程动作判定', () => {
       ['course.publish', true],
     ]);
     assert.equal(
-      isCourseActionFeatureAllowed('course.import', 'GRAPHIC_DESIGNER', granted, caps),
+      isCourseActionFeatureAllowed(
+        'course.import',
+        'GRAPHIC_DESIGNER',
+        granted,
+        caps,
+      ),
       true,
     );
     assert.equal(
-      isCourseActionFeatureAllowed('course.export', 'GRAPHIC_DESIGNER', granted, caps),
+      isCourseActionFeatureAllowed(
+        'course.export',
+        'GRAPHIC_DESIGNER',
+        granted,
+        caps,
+      ),
       false,
     );
     const revoked = withGrant([['course.publish', false]]);

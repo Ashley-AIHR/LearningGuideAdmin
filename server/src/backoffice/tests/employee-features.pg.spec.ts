@@ -234,10 +234,7 @@ describeDb('employee feature grants (PostgreSQL)', () => {
 
     it('returns null for an unknown employee', async () => {
       expect(
-        await getEmployeeFeatures(
-          '0192cccc-0000-7000-8000-00000000ffff',
-          ALL,
-        ),
+        await getEmployeeFeatures('0192cccc-0000-7000-8000-00000000ffff', ALL),
       ).toBeNull();
     });
 
@@ -469,7 +466,9 @@ describeDb('employee feature grants (PostgreSQL)', () => {
         ipAddress: null,
       });
       expect(demote.ok).toBe(false);
-      expect(demote.ok === false && demote.code).toBe('PROTECTED_ADMIN_ACCOUNT');
+      expect(demote.ok === false && demote.code).toBe(
+        'PROTECTED_ADMIN_ACCOUNT',
+      );
       const inactive = await updateEmployee({
         employeeId: ADMIN_A,
         accountStatus: 'INACTIVE',
@@ -479,7 +478,9 @@ describeDb('employee feature grants (PostgreSQL)', () => {
         ipAddress: null,
       });
       expect(inactive.ok).toBe(false);
-      expect(inactive.ok === false && inactive.code).toBe('PROTECTED_ADMIN_ACCOUNT');
+      expect(inactive.ok === false && inactive.code).toBe(
+        'PROTECTED_ADMIN_ACCOUNT',
+      );
       const rows = await db.query<{ role: string; account_status: string }>(
         `SELECT role, account_status FROM employees WHERE employee_id = $1`,
         [ADMIN_A],

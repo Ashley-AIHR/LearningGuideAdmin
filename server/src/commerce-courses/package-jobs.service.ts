@@ -865,8 +865,7 @@ export class PackageJobsService {
     await this.prisma.coursePackageJob.update({
       where: { id: jobId },
       data: {
-        status:
-          result.report.errors.length > 0 ? 'FAILED' : 'AWAITING_CONFIRM',
+        status: result.report.errors.length > 0 ? 'FAILED' : 'AWAITING_CONFIRM',
         stage: 'VALIDATED',
         progress: 100,
         manifest: result.manifest as unknown as Prisma.InputJsonValue,

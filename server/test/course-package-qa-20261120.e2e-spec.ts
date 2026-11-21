@@ -807,7 +807,8 @@ describe('Course package QA fixes 2026-11-20 (e2e)', () => {
         .post('/api/backoffice/courses/import/package/session')
         .send({ fileName: 'chunked.lgcourse.zip', bytesTotal: zip.length });
       expect(session.status).toBe(200);
-      const jobId = session.body.data.jobId as string;
+      const jobId = (session.body as { data?: { jobId?: string } }).data
+        ?.jobId as string;
       createdJobIds.push(jobId);
 
       const chunk = await agent
@@ -818,9 +819,11 @@ describe('Course package QA fixes 2026-11-20 (e2e)', () => {
       const complete = await agent
         .post(`/api/backoffice/courses/import/package/${jobId}/complete`)
         .expect(200);
-      expect(complete.body.data.stage).toMatch(/PACKAGE_QUEUED|VALIDATING/);
+      expect(
+        (complete.body as { data?: { stage?: string } }).data?.stage,
+      ).toMatch(/PACKAGE_QUEUED|VALIDATING/);
 
-      let status = complete.body.data as JobView;
+      let status = (complete.body as { data?: JobView }).data as JobView;
       for (
         let attempt = 0;
         attempt < 100 &&

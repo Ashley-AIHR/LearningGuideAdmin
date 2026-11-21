@@ -16,7 +16,6 @@ import {
   signInAs,
 } from './helpers/employee-session';
 import type { EmployeeFeaturesView } from '../src/backoffice/modules/rbac/employeeFeatures';
-import type { FeatureKey } from '../src/backoffice/modules/rbac/features';
 import type { SessionPayload } from '../src/backoffice/nest/auth.controller';
 
 /**
@@ -223,7 +222,7 @@ describe('Employee feature grants (e2e)', () => {
     const res: SuccessResponse<SessionPayload> = await finance
       .get('/api/session')
       .expect(200);
-    const features = res.body.data.features as FeatureKey[];
+    const features = res.body.data.features;
     expect(features).toContain('course.publish');
     expect(features).not.toContain('module.knowledge');
     expect(features).toContain('course.view');

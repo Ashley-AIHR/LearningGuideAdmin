@@ -2,7 +2,10 @@ import { validateCourseContent } from './package-validate';
 import type { PackageCourse } from './contracts/manifest';
 
 /** 一个结构完整的 VIDEO_ONLY 课程，可注入视频时长与学习点时间。 */
-function course(durationSeconds: number | undefined, timeSeconds: number): PackageCourse {
+function course(
+  durationSeconds: number | undefined,
+  timeSeconds: number,
+): PackageCourse {
   return {
     code: 'C1',
     slug: 'c1',

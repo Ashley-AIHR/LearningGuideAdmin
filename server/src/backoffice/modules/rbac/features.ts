@@ -141,9 +141,11 @@ for (const module of MODULE_FEATURES) {
 
 /** 反向索引：动作开关 → 路由动作。 */
 const FEATURE_ACTION = new Map<CourseActionFeatureKey, ActionKind>(
-  (Object.entries(COURSE_ACTION_FEATURE) as Array<
-    [ActionKind, CourseActionFeatureKey]
-  >).map(([action, feature]) => [feature, action]),
+  (
+    Object.entries(COURSE_ACTION_FEATURE) as Array<
+      [ActionKind, CourseActionFeatureKey]
+    >
+  ).map(([action, feature]) => [feature, action]),
 );
 
 /** 单个课程动作键是否生效（路由级「任一命中」门槛用）。 */
@@ -169,7 +171,10 @@ export type EffectiveFeature = {
   level: PermissionLevel | null;
 };
 
-function baselineLevel(role: EmployeeRole, module: ModuleFeatureKey): PermissionLevel {
+function baselineLevel(
+  role: EmployeeRole,
+  module: ModuleFeatureKey,
+): PermissionLevel {
   if (module === 'module.accounts') {
     // PRD §3.3 / PORT-§15.3：员工账号管理只有 Admin 可访问，非 Admin 连子菜单都不可见。
     // 账号开关只能收紧（false），不能把 accounts 授给非 Admin —— 这是 module 通用规则
@@ -282,7 +287,7 @@ export function resolveEffectiveFeatures(input: {
       return { key: entry.key, allowed: level !== 'NONE', level };
     }
     // course.* 动作只有布尔结果
-    const action = FEATURE_ACTION.get(entry.key as CourseActionFeatureKey);
+    const action = FEATURE_ACTION.get(entry.key);
     const allowed = action
       ? effectiveCourseAction(role, action, grants, enabledCapabilities)
       : false;
@@ -304,13 +309,15 @@ export function effectiveFeatureKeys(input: {
  * 角色基线（不看账号开关）：功能权限抽屉用来解释「继承」到底继承到什么。
  * module.* 给角色矩阵级别；course.* 给角色矩阵下的布尔结果。
  */
-export function resolveBaselineFeatures(role: EmployeeRole): EffectiveFeature[] {
+export function resolveBaselineFeatures(
+  role: EmployeeRole,
+): EffectiveFeature[] {
   return FEATURE_CATALOG.map((entry) => {
     if (isModuleFeatureKey(entry.key)) {
       const level = baselineLevel(role, entry.key);
       return { key: entry.key, allowed: level !== 'NONE', level };
     }
-    const action = FEATURE_ACTION.get(entry.key as CourseActionFeatureKey);
+    const action = FEATURE_ACTION.get(entry.key);
     return {
       key: entry.key,
       allowed: action ? isActionAllowed(role, 'course', action) : false,

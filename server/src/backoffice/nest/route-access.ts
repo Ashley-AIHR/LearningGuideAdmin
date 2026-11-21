@@ -153,10 +153,7 @@ function backofficeCourseAction(
 }
 
 /** /api/admin/employees/**：读 = VIEW；写 = FULL；功能权限 GET/PUT 只有 Full 可读写。 */
-function accountsAdminAction(
-  method: string,
-  segments: string[],
-): ActionKind {
+function accountsAdminAction(method: string, segments: string[]): ActionKind {
   // segments: ['admin', 'employees', :id, 'features']
   if (segments.length >= 4 && segments[3] === 'features') return 'PUBLISH';
   return method === 'GET' || method === 'HEAD' ? 'VIEW' : 'CREATE';

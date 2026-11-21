@@ -2,7 +2,11 @@ import type { PoolClient } from 'pg';
 
 import { withAdminGuard } from '../lib/adminGuard';
 import { query, withTransaction } from '../lib/db';
-import { isFeatureKey, type FeatureGrantMap, type FeatureKey } from '../modules/rbac/features';
+import {
+  isFeatureKey,
+  type FeatureGrantMap,
+  type FeatureKey,
+} from '../modules/rbac/features';
 
 /**
  * 账号级功能开关的读写（表见 migration 20261120120000_employee_feature_grants）。
@@ -126,8 +130,14 @@ export async function replaceForEmployeeGuarded(input: {
 }): Promise<{ applied: boolean; before: FeatureGrantMap }> {
   return withAdminGuard(async (client) => {
     const before = await mapForEmployeeWithin(client, input.employeeId);
-    if (!(await input.decide(before, client))) return { applied: false, before };
-    await replaceWithin(client, input.employeeId, input.grants, input.updatedBy);
+    if (!(await input.decide(before, client)))
+      return { applied: false, before };
+    await replaceWithin(
+      client,
+      input.employeeId,
+      input.grants,
+      input.updatedBy,
+    );
     return { applied: true, before };
   });
 }

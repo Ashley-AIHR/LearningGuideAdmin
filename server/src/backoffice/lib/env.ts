@@ -50,7 +50,11 @@ export function generateSecret(): string {
  */
 export function appEnvName(): AppEnvName {
   const raw = (process.env.APP_ENV ?? 'DEV').toUpperCase();
-  return raw === 'SIT' || raw === 'UAT' || raw === 'PPE' || raw === 'PROD' || raw === 'SANDBOX'
+  return raw === 'SIT' ||
+    raw === 'UAT' ||
+    raw === 'PPE' ||
+    raw === 'PROD' ||
+    raw === 'SANDBOX'
     ? raw
     : 'DEV';
 }

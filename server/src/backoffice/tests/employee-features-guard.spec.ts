@@ -11,6 +11,7 @@ import { ConfigService } from '@nestjs/config';
 import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { Test } from '@nestjs/testing';
 import type { INestApplication } from '@nestjs/common';
+import type { Server } from 'node:http';
 import request from 'supertest';
 
 import { configureApp } from '../../common/app-setup';
@@ -44,7 +45,9 @@ jest.setTimeout(30_000);
 const mockGrantMaps = new Map<string, Map<string, boolean>>();
 jest.mock('../repositories/featureGrantRepository', () => ({
   mapForEmployee: jest.fn((employeeId: string) =>
-    Promise.resolve(mockGrantMaps.get(employeeId) ?? new Map<string, boolean>()),
+    Promise.resolve(
+      mockGrantMaps.get(employeeId) ?? new Map<string, boolean>(),
+    ),
   ),
 }));
 
@@ -173,7 +176,7 @@ describe('BackofficeAccessGuard: account feature grants', () => {
     app = undefined;
   });
 
-  const server = () => app!.getHttpServer();
+  const server = (): Server => app!.getHttpServer() as Server;
   const as = (role: EmployeeRole) => `lgbo_session=${role}`;
 
   async function expectStatus(
@@ -182,7 +185,9 @@ describe('BackofficeAccessGuard: account feature grants', () => {
     path: string,
     status: number,
   ): Promise<void> {
-    const response = await request(server())[method](path).set('Cookie', as(role));
+    const response = await request(server())
+      [method](path)
+      .set('Cookie', as(role));
     if (response.status !== status) {
       throw new Error(
         `${method.toUpperCase()} ${path} as ${role}: expected ${status}, got ${response.status} ${JSON.stringify(response.body)}`,
@@ -192,8 +197,18 @@ describe('BackofficeAccessGuard: account feature grants', () => {
 
   it('inherits the role matrix when no account switch exists', async () => {
     app = await createApp(undefined);
-    await expectStatus('ADMIN', 'post', '/api/backoffice/courses/c1/publish', 200);
-    await expectStatus('GRAPHIC_DESIGNER', 'put', '/api/backoffice/courses/c1', 200);
+    await expectStatus(
+      'ADMIN',
+      'post',
+      '/api/backoffice/courses/c1/publish',
+      200,
+    );
+    await expectStatus(
+      'GRAPHIC_DESIGNER',
+      'put',
+      '/api/backoffice/courses/c1',
+      200,
+    );
     for (const path of [
       '/api/backoffice/courses',
       '/api/backoffice/courses/c1/publish',
@@ -203,7 +218,12 @@ describe('BackofficeAccessGuard: account feature grants', () => {
       await expectStatus('GRAPHIC_DESIGNER', 'post', path, 403);
     }
     await expectStatus('COURSE_CREATOR', 'get', '/api/backoffice/courses', 200);
-    await expectStatus('COURSE_CREATOR', 'put', '/api/backoffice/courses/c1', 403);
+    await expectStatus(
+      'COURSE_CREATOR',
+      'put',
+      '/api/backoffice/courses/c1',
+      403,
+    );
   });
 
   it('opens import, export, publish and edit independently', async () => {
@@ -243,7 +263,12 @@ describe('BackofficeAccessGuard: account feature grants', () => {
     );
 
     grant('COURSE_CREATOR', [['course.edit', true]]);
-    await expectStatus('COURSE_CREATOR', 'put', '/api/backoffice/courses/c1', 200);
+    await expectStatus(
+      'COURSE_CREATOR',
+      'put',
+      '/api/backoffice/courses/c1',
+      200,
+    );
 
     grant('GRAPHIC_DESIGNER', [['course.publish', true]]);
     await expectStatus(
@@ -252,25 +277,50 @@ describe('BackofficeAccessGuard: account feature grants', () => {
       '/api/backoffice/courses/c1/publish',
       200,
     );
-    await expectStatus('GRAPHIC_DESIGNER', 'post', '/api/backoffice/courses', 403);
+    await expectStatus(
+      'GRAPHIC_DESIGNER',
+      'post',
+      '/api/backoffice/courses',
+      403,
+    );
 
     // 新建/删除不再有账号级开关（permissions.md：新建/删除只由角色矩阵控制）。
     // 存量 grant 行（旧词表）读取时按未知 key 忽略：既不能给 View/Edit 放行，也不能收回 Full。
     grant('COURSE_CREATOR', [['course.create', true]]);
-    await expectStatus('COURSE_CREATOR', 'post', '/api/backoffice/courses', 403);
+    await expectStatus(
+      'COURSE_CREATOR',
+      'post',
+      '/api/backoffice/courses',
+      403,
+    );
 
     await expectStatus('ADMIN', 'delete', '/api/backoffice/courses/c1', 200);
     grant('ADMIN', [['course.delete', false]]);
     await expectStatus('ADMIN', 'delete', '/api/backoffice/courses/c1', 200);
     grant('GRAPHIC_DESIGNER', [['course.delete', true]]);
-    await expectStatus('GRAPHIC_DESIGNER', 'delete', '/api/backoffice/courses/c1', 403);
-    await expectStatus('OPERATION_ADMIN', 'delete', '/api/backoffice/courses/c1', 200);
+    await expectStatus(
+      'GRAPHIC_DESIGNER',
+      'delete',
+      '/api/backoffice/courses/c1',
+      403,
+    );
+    await expectStatus(
+      'OPERATION_ADMIN',
+      'delete',
+      '/api/backoffice/courses/c1',
+      200,
+    );
   });
 
   it('lets a denied action switch tighten even an Admin', async () => {
     app = await createApp(undefined);
     grant('ADMIN', [['course.publish', false]]);
-    await expectStatus('ADMIN', 'post', '/api/backoffice/courses/c1/publish', 403);
+    await expectStatus(
+      'ADMIN',
+      'post',
+      '/api/backoffice/courses/c1/publish',
+      403,
+    );
     await expectStatus('ADMIN', 'put', '/api/backoffice/courses/c1', 200);
 
     grant('ADMIN', [
@@ -278,7 +328,12 @@ describe('BackofficeAccessGuard: account feature grants', () => {
       ['course.publish', true],
     ]);
     await expectStatus('ADMIN', 'get', '/api/backoffice/courses', 403);
-    await expectStatus('ADMIN', 'post', '/api/backoffice/courses/c1/publish', 403);
+    await expectStatus(
+      'ADMIN',
+      'post',
+      '/api/backoffice/courses/c1/publish',
+      403,
+    );
   });
 
   it('lets an allowed module switch lift a role NONE to VIEW, and no further', async () => {
@@ -336,8 +391,18 @@ describe('BackofficeAccessGuard: account feature grants', () => {
     // 账号开关只能收紧，不能把员工账号管理授给非 Admin
     await expectStatus('FINANCE', 'get', '/api/admin/employees', 403);
     await expectStatus('FINANCE', 'patch', '/api/admin/employees/e1', 403);
-    await expectStatus('FINANCE', 'get', '/api/admin/employees/e1/features', 403);
-    await expectStatus('FINANCE', 'put', '/api/admin/employees/e1/features', 403);
+    await expectStatus(
+      'FINANCE',
+      'get',
+      '/api/admin/employees/e1/features',
+      403,
+    );
+    await expectStatus(
+      'FINANCE',
+      'put',
+      '/api/admin/employees/e1/features',
+      403,
+    );
   });
 
   it('an accounts denial removes account management from an Admin', async () => {
@@ -358,9 +423,7 @@ describe('BackofficeAccessGuard: account feature grants', () => {
 
   it('rejects signed-out calls before any feature decision', async () => {
     app = await createApp(undefined);
-    await request(server())
-      .get('/api/backoffice/courses')
-      .expect(401);
+    await request(server()).get('/api/backoffice/courses').expect(401);
     await request(server()).get('/api/admin/employees').expect(401);
   });
 });

@@ -155,14 +155,20 @@ describe('PackageImporter — 竞态下的冲突策略错误码', () => {
     const prisma = {
       commerceCourse: {
         findFirst: ({ where }: { where: { code?: string } }) =>
-          Promise.resolve(where.code ? { id: 'existing', code: where.code } : null),
+          Promise.resolve(
+            where.code ? { id: 'existing', code: where.code } : null,
+          ),
       },
     };
     await expect(
-      importer(prisma).importPackage(manifestWith('SCI001', 'modeling-life'), new Map(), {
-        ...options,
-        onConflict: 'CREATE_NEW_COURSE',
-      }),
+      importer(prisma).importPackage(
+        manifestWith('SCI001', 'modeling-life'),
+        new Map(),
+        {
+          ...options,
+          onConflict: 'CREATE_NEW_COURSE',
+        },
+      ),
     ).rejects.toMatchObject({
       code: 'PACKAGE_CONFLICT_STRATEGY_UNSUPPORTED',
       status: 422,
