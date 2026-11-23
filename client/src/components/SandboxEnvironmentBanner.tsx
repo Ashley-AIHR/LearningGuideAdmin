@@ -1,8 +1,12 @@
 /**
  * Persistent Sandbox chrome for every Admin page.
- * Detects VITE_APP_ENV at build time, or a hostname that includes "sandbox".
+ * On the `sandbox` branch this flag is true so the strip shows on App Runner
+ * default hosts too (hostname may not contain "sandbox").
  */
+export const SHOW_SANDBOX_CHROME = true
+
 export function isSandboxClientEnvironment() {
+  if (SHOW_SANDBOX_CHROME) return true
   const baked = String(import.meta.env.VITE_APP_ENV || '').trim().toUpperCase()
   if (baked === 'SANDBOX') return true
   if (typeof window === 'undefined') return false
